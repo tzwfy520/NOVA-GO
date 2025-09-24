@@ -1,0 +1,67 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+log/*.log
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+temp/
+tmp/
+
+# Build artifacts
+dist/
+build/
+
+# Config files with sensitive data
+configs/local.yaml
+configs/secret.yaml
+
+# Docker
+.dockerignore
+
+# Test coverage
+coverage.out
+coverage.html
