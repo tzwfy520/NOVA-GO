@@ -1,23 +1,27 @@
-package huawei_s
+package huawei_ce
 
 import (
     "strings"
     "github.com/sshcollectorpro/sshcollectorpro/addone/collect"
 )
 
-func parseDisplayCurrentRow(ctx collect.ParseContext, raw string) collect.FormattedRow {
-    // 存根：统计配置行数
+// 仅处理 display version 回显
+func parseDisplayVersionRow(ctx collect.ParseContext, raw string) collect.FormattedRow {
     lines := strings.Split(strings.ReplaceAll(raw, "\r", "\n"), "\n")
+    verLines := 0
+    for _, ln := range lines {
+        if strings.Contains(strings.ToLower(ln), "version") { verLines++ }
+    }
     return collect.FormattedRow{
-        Table: "device_config",
+        Table: "version_info",
         Base: collect.BaseRecord{
             TaskID:       ctx.TaskID,
             TaskStatus:   ctx.Status,
             RawStoreJSON: ctx.RawPaths.Marshal(),
         },
         Data: map[string]interface{}{
-            "type":       "config",
-            "line_count": len(lines),
+            "type":          "version",
+            "version_lines": verLines,
         },
     }
 }

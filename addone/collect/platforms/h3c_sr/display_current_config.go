@@ -1,4 +1,4 @@
-package huawei_s
+package h3c_sr
 
 import (
     "strings"
@@ -6,8 +6,15 @@ import (
 )
 
 func parseDisplayCurrentRow(ctx collect.ParseContext, raw string) collect.FormattedRow {
-    // 存根：统计配置行数
     lines := strings.Split(strings.ReplaceAll(raw, "\r", "\n"), "\n")
+    hasHostname := false
+    for _, ln := range lines {
+        tl := strings.ToLower(strings.TrimSpace(ln))
+        if strings.HasPrefix(tl, "hostname") || strings.Contains(tl, "sysname") {
+            hasHostname = true
+            break
+        }
+    }
     return collect.FormattedRow{
         Table: "device_config",
         Base: collect.BaseRecord{
@@ -16,8 +23,9 @@ func parseDisplayCurrentRow(ctx collect.ParseContext, raw string) collect.Format
             RawStoreJSON: ctx.RawPaths.Marshal(),
         },
         Data: map[string]interface{}{
-            "type":       "config",
-            "line_count": len(lines),
+            "type":         "config",
+            "line_count":   len(lines),
+            "has_hostname": hasHostname,
         },
     }
 }

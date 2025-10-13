@@ -1,14 +1,14 @@
 package handler
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"time"
+    "fmt"
+    "net/http"
+    "strings"
+    "time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/sshcollectorpro/sshcollectorpro/internal/service"
-	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+    "github.com/gin-gonic/gin"
+    "github.com/sshcollectorpro/sshcollectorpro/internal/service"
+    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 )
 
 // CollectorHandler 采集器处理器
@@ -35,8 +35,8 @@ func NewCollectorHandler(collectorService *service.CollectorService) *CollectorH
 // @Failure 500 {object} ErrorResponse "服务器内部错误"
 // @Router /api/v1/collector/execute [post]
 func (h *CollectorHandler) ExecuteTask(c *gin.Context) {
-	var request service.CollectRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
+    var request service.CollectRequest
+    if err := c.ShouldBindJSON(&request); err != nil {
 		logger.Error("Invalid request parameters", "error", err)
 		c.JSON(http.StatusBadRequest, ErrorResponse{
 			Code:    "INVALID_PARAMS",
@@ -45,8 +45,8 @@ func (h *CollectorHandler) ExecuteTask(c *gin.Context) {
 		return
 	}
 
-	// 参数验证
-	if err := h.validateCollectRequest(&request); err != nil {
+    // 参数验证
+    if err := h.validateCollectRequest(&request); err != nil {
 		logger.Error("Request validation failed", "error", err)
 		c.JSON(http.StatusBadRequest, ErrorResponse{
 			Code:    "VALIDATION_FAILED",
@@ -55,17 +55,11 @@ func (h *CollectorHandler) ExecuteTask(c *gin.Context) {
 		return
 	}
 
-	// 设置默认超时时间
-	if request.Timeout <= 0 {
-		request.Timeout = 30 // 默认30秒
-	}
-
-	// 创建上下文
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(request.Timeout)*time.Second)
-	defer cancel()
+    // 创建上下文（超时在服务层根据插件默认或传入参数处理）
+    ctx := c.Request.Context()
 
 	// 执行采集任务
-	response, err := h.collectorService.ExecuteTask(ctx, &request)
+    response, err := h.collectorService.ExecuteTask(ctx, &request)
 	if err != nil {
 		logger.Error("Failed to execute task", "task_id", request.TaskID, "error", err)
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
@@ -212,7 +206,7 @@ func (h *CollectorHandler) Health(c *gin.Context) {
 // @Failure 500 {object} ErrorResponse "服务器内部错误"
 // @Router /api/v1/collector/batch [post]
 func (h *CollectorHandler) BatchExecute(c *gin.Context) {
-	var requests []service.CollectRequest
+    var requests []service.CollectRequest
 	if err := c.ShouldBindJSON(&requests); err != nil {
 		logger.Error("Invalid batch request parameters", "error", err)
 		c.JSON(http.StatusBadRequest, ErrorResponse{
@@ -253,30 +247,22 @@ func (h *CollectorHandler) BatchExecute(c *gin.Context) {
 			continue
 		}
 
-		// 设置默认超时时间
-		if request.Timeout <= 0 {
-			request.Timeout = 30
-		}
+        // 同步执行；超时在服务层根据插件默认或传入参数处理
+        ctx := c.Request.Context()
+        response, err := h.collectorService.ExecuteTask(ctx, &request)
+        if err != nil {
+            response = &service.CollectResponse{
+                TaskID:    request.TaskID,
+                Success:   false,
+                Error:     err.Error(),
+                Timestamp: time.Now(),
+            }
+        }
+        
+        responses = append(responses, response)
 
-		// 为了避免阻塞，这里可以考虑异步执行
-		// 当前实现为同步执行，实际使用中可以改为异步
-		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(request.Timeout)*time.Second)
-		
-		response, err := h.collectorService.ExecuteTask(ctx, &request)
-		if err != nil {
-			response = &service.CollectResponse{
-				TaskID:    request.TaskID,
-				Success:   false,
-				Error:     err.Error(),
-				Timestamp: time.Now(),
-			}
-		}
-		
-		responses = append(responses, response)
-		cancel()
-
-		logger.Info("Batch task completed", "index", i+1, "task_id", request.TaskID, "success", response.Success)
-	}
+        logger.Info("Batch task completed", "index", i+1, "task_id", request.TaskID, "success", response.Success)
+    }
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    "SUCCESS",
@@ -288,35 +274,43 @@ func (h *CollectorHandler) BatchExecute(c *gin.Context) {
 
 // validateCollectRequest 验证采集请求参数
 func (h *CollectorHandler) validateCollectRequest(request *service.CollectRequest) error {
-	if request.TaskID == "" {
-		return fmt.Errorf("任务ID不能为空")
-	}
-	
-	if request.DeviceIP == "" {
-		return fmt.Errorf("设备IP不能为空")
-	}
-	
-	if request.Port <= 0 || request.Port > 65535 {
-		return fmt.Errorf("端口号必须在1-65535之间")
-	}
-	
-	if request.Username == "" {
-		return fmt.Errorf("用户名不能为空")
-	}
-	
-	if request.Password == "" {
-		return fmt.Errorf("密码不能为空")
-	}
-	
-	if len(request.Commands) == 0 {
-		return fmt.Errorf("命令列表不能为空")
-	}
-	
-	if request.Timeout > 300 {
-		return fmt.Errorf("超时时间不能超过300秒")
-	}
-	
-	return nil
+    if strings.TrimSpace(request.TaskID) == "" {
+        return fmt.Errorf("任务ID不能为空")
+    }
+    if strings.TrimSpace(request.DeviceIP) == "" {
+        return fmt.Errorf("设备IP不能为空")
+    }
+    if strings.TrimSpace(request.UserName) == "" {
+        return fmt.Errorf("用户名不能为空")
+    }
+    // 密码可为空？通常必须；若未来支持密钥则可为空。此处仍要求密码
+    if strings.TrimSpace(request.Password) == "" {
+        return fmt.Errorf("密码不能为空")
+    }
+    // collect_protocol 校验
+    if p := strings.TrimSpace(strings.ToLower(request.CollectProtocol)); p != "" && p != "ssh" {
+        return fmt.Errorf("不支持的采集协议: %s", request.CollectProtocol)
+    }
+    // system 模式需要平台
+    origin := strings.TrimSpace(strings.ToLower(request.CollectOrigin))
+    if origin == "system" {
+        if strings.TrimSpace(request.DevicePlatform) == "" {
+            return fmt.Errorf("system模式需要指定设备平台(device_platform)")
+        }
+    }
+    // 端口（可选）范围校验
+    if request.Port != 0 && (request.Port < 1 || request.Port > 65535) {
+        return fmt.Errorf("端口号必须在1-65535之间")
+    }
+    // timeout 上限
+    if request.Timeout != nil && *request.Timeout > 300 {
+        return fmt.Errorf("超时时间不能超过300秒")
+    }
+    // retry 非负
+    if request.RetryFlag != nil && *request.RetryFlag < 0 {
+        return fmt.Errorf("重试次数不能为负数")
+    }
+    return nil
 }
 
 // ErrorResponse 错误响应

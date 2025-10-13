@@ -3,5 +3,7 @@ ip:139.196.196.96
 端口:21202
 user:eccom123
 password:Eccom@12345
-设备类型:huawei
-采集命令:display current/display version
+设备类型:h3c_sr
+采集命令:display current/display version/display ntp/display interface
+\ncurl命令（customer模式）:
+curl -sS -m 120 -X POST http://localhost:18001/api/v1/collector/execute -H 'Content-Type: application/json' -d '{"task_id":"test-h3c-sr-139.196.196.96","collect_origin":"customer","device_ip":"139.196.196.96","collect_protocol":"ssh","port":21202,"user_name":"eccom123","password":"Eccom@12345","device_platform":"h3c_sr","cli_list":["display current","display version","display ntp","display interface"]}'

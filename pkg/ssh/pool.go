@@ -94,15 +94,21 @@ func (p *Pool) GetConnection(ctx context.Context, info *ConnectionInfo) (*Client
 
 // ReleaseConnection 释放SSH连接
 func (p *Pool) ReleaseConnection(info *ConnectionInfo) {
-	key := p.getConnectionKey(info)
+    key := p.getConnectionKey(info)
 
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
+    p.mutex.Lock()
+    defer p.mutex.Unlock()
 
-	if conn, exists := p.connections[key]; exists {
-		conn.inUse = false
-		conn.lastUsed = time.Now()
-	}
+    if conn, exists := p.connections[key]; exists {
+        // 若连接已失效，立即关闭并从池中移除，避免后续复用导致 EOF
+        if !conn.client.IsConnected() {
+            conn.client.Close()
+            delete(p.connections, key)
+            return
+        }
+        conn.inUse = false
+        conn.lastUsed = time.Now()
+    }
 }
 
 // CloseConnection 关闭指定连接

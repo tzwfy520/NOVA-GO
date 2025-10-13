@@ -1,31 +1,31 @@
-package cisco_ios
+package h3c_s
 
 import (
     "strings"
     "github.com/sshcollectorpro/sshcollectorpro/addone/collect"
 )
 
-func parseShowRunRow(ctx collect.ParseContext, raw string) collect.FormattedRow {
-    // 存根：返回行数与是否包含 hostname
+func parseDisplayVersionRow(ctx collect.ParseContext, raw string) collect.FormattedRow {
     lines := strings.Split(strings.ReplaceAll(raw, "\r", "\n"), "\n")
-    hasHostname := false
+    hasVersion := false
     for _, ln := range lines {
-        if strings.HasPrefix(strings.TrimSpace(strings.ToLower(ln)), "hostname") {
-            hasHostname = true
+        tl := strings.ToLower(strings.TrimSpace(ln))
+        if strings.Contains(tl, "version") || strings.Contains(tl, "software") {
+            hasVersion = true
             break
         }
     }
     return collect.FormattedRow{
-        Table: "device_config",
+        Table: "version_info",
         Base: collect.BaseRecord{
             TaskID:       ctx.TaskID,
             TaskStatus:   ctx.Status,
             RawStoreJSON: ctx.RawPaths.Marshal(),
         },
         Data: map[string]interface{}{
-            "type":        "config",
+            "type":        "version",
             "line_count":  len(lines),
-            "has_hostname": hasHostname,
+            "has_version": hasVersion,
         },
     }
 }

@@ -18,8 +18,11 @@ func (p *Plugin) Defaults() interact.InteractDefaults {
 }
 
 func (p *Plugin) TransformCommands(in interact.CommandTransformInput) interact.CommandTransformOutput {
-    // 华为平台通常无需进入特权模式，直接返回
-    return interact.CommandTransformOutput{Commands: append([]string{}, in.Commands...)}
+    // 关闭分页，确保长输出完整显示
+    out := make([]string, 0, len(in.Commands)+1)
+    out = append(out, "screen-length disable")
+    out = append(out, in.Commands...)
+    return interact.CommandTransformOutput{Commands: out}
 }
 
 func init() {

@@ -18,18 +18,21 @@ func (p *Plugin) Defaults() interact.InteractDefaults {
 }
 
 func (p *Plugin) TransformCommands(in interact.CommandTransformInput) interact.CommandTransformOutput {
-    // 如果需要启用特权模式，插入 enable 命令
-    // 可通过 metadata["enable"] 控制，默认启用
+    // 关闭分页确保完整输出：terminal length 0
+    // 可通过 metadata["enable"] 控制是否先进入特权模式（默认启用）
     enable := true
     if v, ok := in.Metadata["enable"].(bool); ok {
         enable = v
     }
-    if !enable {
-        return interact.CommandTransformOutput{Commands: append([]string{}, in.Commands...)}
-    }
 
-    out := make([]string, 0, len(in.Commands)+1)
-    out = append(out, "enable")
+    pre := make([]string, 0, 2)
+    if enable {
+        pre = append(pre, "enable")
+    }
+    pre = append(pre, "terminal length 0")
+
+    out := make([]string, 0, len(in.Commands)+len(pre))
+    out = append(out, pre...)
     out = append(out, in.Commands...)
     return interact.CommandTransformOutput{Commands: out}
 }

@@ -52,10 +52,12 @@ type ParseOutput struct {
 
 // CollectPlugin 采集插件接口
 type CollectPlugin interface {
-	Name() string
-	StorageDefaults() StorageDefaults
-	// Parse 将原始命令输出解析为结构化数据
-	Parse(ctx ParseContext, raw string) (ParseOutput, error)
+    Name() string
+    StorageDefaults() StorageDefaults
+    // SystemCommands 返回该平台系统内置采集命令（用于 collect_origin=system）
+    SystemCommands() []string
+    // Parse 将原始命令输出解析为结构化数据
+    Parse(ctx ParseContext, raw string) (ParseOutput, error)
 }
 
 // DefaultPlugin 系统默认采集插件
@@ -129,6 +131,9 @@ func (p *DefaultPlugin) StorageDefaults() StorageDefaults {
 
     return StorageDefaults{RawStore: raw, DBStore: db}
 }
+
+// SystemCommands 默认平台不提供内置命令
+func (p *DefaultPlugin) SystemCommands() []string { return []string{} }
 
 func (p *DefaultPlugin) Parse(ctx ParseContext, raw string) (ParseOutput, error) {
 	// 默认不解析，直接返回原始数据包裹
