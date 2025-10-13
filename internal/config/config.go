@@ -14,6 +14,7 @@ type Config struct {
     Server     ServerConfig     `mapstructure:"server"`
     Collector  CollectorConfig  `mapstructure:"collector"`
     Database   DatabaseConfig   `mapstructure:"database"`
+    Storage    StorageConfig    `mapstructure:"storage"`
     SSH        SSHConfig        `mapstructure:"ssh"`
     Log        LogConfig        `mapstructure:"log"`
 }
@@ -40,15 +41,40 @@ type CollectorConfig struct {
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
-	SQLite SQLiteConfig `mapstructure:"sqlite"`
+    SQLite SQLiteConfig `mapstructure:"sqlite"`
 }
 
 // SQLiteConfig SQLite配置
 type SQLiteConfig struct {
-	Path            string        `mapstructure:"path"`
-	MaxIdleConns    int           `mapstructure:"max_idle_conns"`
-	MaxOpenConns    int           `mapstructure:"max_open_conns"`
-	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+    Path            string        `mapstructure:"path"`
+    MaxIdleConns    int           `mapstructure:"max_idle_conns"`
+    MaxOpenConns    int           `mapstructure:"max_open_conns"`
+    ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
+}
+
+// StorageConfig 采集数据存储配置（用于原始与格式化数据）
+type StorageConfig struct {
+    Minio    MinioConfig    `mapstructure:"minio"`
+    Postgres PostgresConfig `mapstructure:"postgres"`
+}
+
+// MinioConfig 对象存储配置（原始数据）
+type MinioConfig struct {
+    Host      string `mapstructure:"host"`
+    Port      int    `mapstructure:"port"`
+    AccessKey string `mapstructure:"access_key"`
+    SecretKey string `mapstructure:"secret_key"`
+    Bucket    string `mapstructure:"bucket"`
+    Secure    bool   `mapstructure:"secure"`
+}
+
+// PostgresConfig 格式化数据存储配置（PostgreSQL）
+type PostgresConfig struct {
+    Host     string `mapstructure:"host"`
+    Port     int    `mapstructure:"port"`
+    Username string `mapstructure:"username"`
+    Password string `mapstructure:"password"`
+    Database string `mapstructure:"database"`
 }
 
 

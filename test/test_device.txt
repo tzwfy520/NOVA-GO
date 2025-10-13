@@ -1,0 +1,7 @@
+ip:139.196.196.96
+协议:ssh
+端口:21202
+user:eccom123
+password:Eccom@12345
+设备类型:huawei
+采集命令:display current/display version

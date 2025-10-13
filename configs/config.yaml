@@ -44,3 +44,19 @@ log:
   max_backups: 5
   max_age: 30  # days
   compress: true
+
+# 采集数据存储（运行时可覆盖默认值）
+storage:
+  minio:
+    host: "127.0.0.1"
+    port: 9000
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "sshcollector-raw"
+    secure: false
+  postgres:
+    host: "127.0.0.1"
+    port: 5432
+    username: "postgres"
+    password: "postgres"
+    database: "sshcollector"
