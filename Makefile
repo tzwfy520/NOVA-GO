@@ -48,10 +48,10 @@ run:
 	./$(BINARY_NAME)
 
 docker-build:
-	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	docker build -f deploy/Dockerfile -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 docker-run:
-	docker run -d --name $(DOCKER_IMAGE) -p 8080:8080 $(DOCKER_IMAGE):$(DOCKER_TAG)
+	docker run -d --name $(DOCKER_IMAGE) -p 18000:18000 $(DOCKER_IMAGE):$(DOCKER_TAG)
 
 docker-stop:
 	docker stop $(DOCKER_IMAGE)

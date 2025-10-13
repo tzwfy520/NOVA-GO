@@ -1,19 +1,18 @@
 package service
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"strings"
-	"sync"
-	"time"
+    "context"
+    "encoding/json"
+    "fmt"
+    "strings"
+    "sync"
+    "time"
 
 	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
 	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
-	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
-	"github.com/sshcollectorpro/sshcollectorpro/pkg/cache"
-	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
+    "github.com/sshcollectorpro/sshcollectorpro/internal/model"
+    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+    "github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
 )
 
 // CollectorService 采集器服务
@@ -207,8 +206,7 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 		logger.Error("Failed to update task", "task_id", request.TaskID, "error", err)
 	}
 
-	// 缓存结果
-	s.cacheResult(request.TaskID, response)
+    // 已移除 Redis 缓存逻辑
 
 	return response, nil
 }
@@ -344,24 +342,7 @@ func (s *CollectorService) updateTask(task *model.Task) error {
 	return db.Save(task).Error
 }
 
-// cacheResult 缓存结果到Redis
-func (s *CollectorService) cacheResult(taskID string, response *CollectResponse) {
-	redis := cache.GetRedis()
-	if redis == nil {
-		return
-	}
-
-	data, err := json.Marshal(response)
-	if err != nil {
-		logger.Error("Failed to marshal response", "task_id", taskID, "error", err)
-		return
-	}
-
-	key := fmt.Sprintf("task_result:%s", taskID)
-	if err := redis.Set(context.Background(), key, data, 24*time.Hour).Err(); err != nil {
-		logger.Error("Failed to cache result", "task_id", taskID, "error", err)
-	}
-}
+// 已移除 Redis 缓存函数
 
 // logTaskInfo 记录任务信息日志
 func (s *CollectorService) logTaskInfo(taskID, message string) {

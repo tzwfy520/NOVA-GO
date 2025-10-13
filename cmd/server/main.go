@@ -1,20 +1,19 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
 
-	"github.com/sshcollectorpro/sshcollectorpro/api/router"
-	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
-	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
-	"github.com/sshcollectorpro/sshcollectorpro/internal/service"
-	"github.com/sshcollectorpro/sshcollectorpro/pkg/cache"
-	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+    "github.com/sshcollectorpro/sshcollectorpro/api/router"
+    "github.com/sshcollectorpro/sshcollectorpro/internal/config"
+    "github.com/sshcollectorpro/sshcollectorpro/internal/database"
+    "github.com/sshcollectorpro/sshcollectorpro/internal/service"
+    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 )
 
 func main() {
@@ -48,16 +47,7 @@ func main() {
 	}
 	defer database.Close()
 
-	// 初始化Redis缓存（可选）
-	if cfg.Redis.Host != "" {
-		if err := cache.InitRedis(cfg.Redis); err != nil {
-			logger.WithField("error", err).Warn("Failed to initialize Redis, continuing without cache")
-		} else {
-			defer cache.Close()
-		}
-	} else {
-		logger.Info("Redis not configured, running without cache")
-	}
+    // 已移除 Redis 依赖，直接运行
 
 	// 创建采集器服务
 	collectorService := service.NewCollectorService(cfg)

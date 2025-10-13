@@ -70,13 +70,11 @@ func InitSQLite(cfg config.SQLiteConfig) error {
 
 // autoMigrate 自动迁移数据库表
 func autoMigrate() error {
-	return db.AutoMigrate(
-		&model.Collector{},
-		&model.CollectorStatus{},
-		&model.Task{},
-		&model.TaskLog{},
-		&model.DeviceInfo{},
-	)
+    return db.AutoMigrate(
+        &model.Task{},
+        &model.TaskLog{},
+        &model.DeviceInfo{},
+    )
 }
 
 // GetDB 获取数据库实例

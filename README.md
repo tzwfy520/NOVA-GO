@@ -1,6 +1,6 @@
 # SSH采集器专业版 (SSH Collector Pro)
 
-一个高性能、可扩展的SSH设备信息采集系统，支持分布式部署、任务调度和实时监控。
+一个高性能、可扩展的SSH设备信息采集系统，支持分布式部署与实时监控。
 
 ## 🚀 功能特性
 
@@ -8,9 +8,9 @@
 - **SSH连接管理**: 支持密码和密钥认证，连接池复用
 - **设备信息采集**: 自动采集系统信息、性能指标、配置文件等
 - **分布式架构**: 支持多节点部署，负载均衡
-- **任务调度**: 集成XXL-Job，支持定时任务和手动触发
-- **实时监控**: Prometheus + Grafana监控面板
-- **数据存储**: SQLite本地存储 + Redis缓存
+- **任务执行**: 支持并发执行与取消，提供任务状态查询
+ 
+- **数据存储**: SQLite本地存储
 
 ### 技术特性
 - **高性能**: Go语言开发，并发处理能力强
@@ -48,14 +48,11 @@ cd sshcollectorpro
 
 2. **一键部署**
 ```bash
-./scripts/deploy.sh
+./deploy/deploy.sh
 ```
 
 3. **访问服务**
-- SSH采集器API: http://localhost:8080
-- XXL-Job管理后台: http://localhost:8081/xxl-job-admin (admin/123456)
-- Prometheus监控: http://localhost:9090
-- Grafana可视化: http://localhost:3000 (admin/admin123)
+- SSH采集器API: http://localhost:18000
 
 ### 方式二：直接部署（生产环境推荐）
 
@@ -113,7 +110,7 @@ go mod download
 
 #### 添加设备
 ```bash
-curl -X POST http://localhost:8080/api/devices \
+curl -X POST http://localhost:18000/api/devices \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Web服务器01",
@@ -127,14 +124,14 @@ curl -X POST http://localhost:8080/api/devices \
 
 #### 测试连接
 ```bash
-curl -X POST http://localhost:8080/api/devices/1/test
+curl -X POST http://localhost:18000/api/devices/1/test
 ```
 
 ### 任务执行
 
 #### 执行采集任务
 ```bash
-curl -X POST http://localhost:8080/api/collector/execute \
+curl -X POST http://localhost:18000/api/collector/execute \
   -H "Content-Type: application/json" \
   -d '{
     "device_ip": "192.168.1.100",
@@ -147,12 +144,12 @@ curl -X POST http://localhost:8080/api/collector/execute \
 
 #### 查看任务状态
 ```bash
-curl http://localhost:8080/api/collector/status/task_id_here
+curl http://localhost:18000/api/collector/status/task_id_here
 ```
 
 ### 批量执行
 ```bash
-curl -X POST http://localhost:8080/api/collector/batch \
+curl -X POST http://localhost:18000/api/collector/batch \
   -H "Content-Type: application/json" \
   -d '{
     "requests": [
@@ -176,7 +173,7 @@ curl -X POST http://localhost:8080/api/collector/batch \
 # 服务器配置
 server:
   host: "0.0.0.0"
-  port: 8080
+  port: 18000
   read_timeout: 30
   write_timeout: 30
 
@@ -187,12 +184,6 @@ database:
     max_open_conns: 25
     max_idle_conns: 5
 
-# Redis配置
-redis:
-  host: "localhost"
-  port: 6379
-  password: ""
-  db: 0
 
 # SSH配置
 ssh:
@@ -205,11 +196,14 @@ collector:
   tags: ["production", "datacenter-1"]
   heartbeat_interval: 30
 
-# XXL-Job配置
-xxljob:
-  admin_addresses: ["http://localhost:8081/xxl-job-admin"]
-  app_name: "sshcollector-executor"
-  access_token: ""
+# 采集器配置
+collector:
+  id: "collector-001"
+  type: "ssh"
+  version: "1.0.0"
+  tags: ["production", "ssh"]
+  threads: 10
+  concurrent: 5
 
 # 日志配置
 log:
@@ -226,15 +220,11 @@ log:
 ```bash
 # 服务器配置
 export SERVER_HOST=0.0.0.0
-export SERVER_PORT=8080
+export SERVER_PORT=18000
 
 # 数据库配置
 export DATABASE_SQLITE_PATH=/app/data/sshcollector.db
 
-# Redis配置
-export REDIS_HOST=redis
-export REDIS_PORT=6379
-export REDIS_PASSWORD=sshcollector123
 
 # 日志配置
 export LOG_LEVEL=info
@@ -246,83 +236,46 @@ export LOG_OUTPUT=file
 ### 服务架构
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│     Nginx       │    │  SSH Collector  │    │   XXL-Job       │
-│   (反向代理)     │────│   (核心服务)     │────│  (任务调度)      │
-│   Port: 80      │    │   Port: 8080    │    │   Port: 8081    │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         │              ┌─────────────────┐              │
-         │              │     Redis       │              │
-         └──────────────│   (缓存服务)     │──────────────┘
-                        │   Port: 6379    │
-                        └─────────────────┘
-                                 │
-                        ┌─────────────────┐
-                        │     MySQL       │
-                        │  (XXL-Job数据)   │
-                        │   Port: 3306    │
-                        └─────────────────┘
+┌─────────────────┐
+│  SSH Collector  │
+│   (核心服务)     │
+│   Port: 18000   │
+└─────────────────┘
 ```
 
 ### 部署脚本命令
 
 ```bash
 # 完整部署
-./scripts/deploy.sh deploy
+./deploy/deploy.sh deploy
 
 # 启动服务
-./scripts/deploy.sh start
+./deploy/deploy.sh start
 
 # 停止服务
-./scripts/deploy.sh stop
+./deploy/deploy.sh stop
 
 # 重启服务
-./scripts/deploy.sh restart
+./deploy/deploy.sh restart
 
 # 查看状态
-./scripts/deploy.sh status
+./deploy/deploy.sh status
 
 # 查看日志
-./scripts/deploy.sh logs [service_name]
+./deploy/deploy.sh logs [service_name]
 
 # 清理环境
-./scripts/deploy.sh clean
+./deploy/deploy.sh clean
 ```
 
 ### 数据持久化
-
-Docker部署会创建以下持久化卷：
-- `redis-data`: Redis数据
-- `mysql-data`: MySQL数据
-- `xxl-job-logs`: XXL-Job日志
-- `prometheus-data`: Prometheus数据
-- `grafana-data`: Grafana数据
 
 本地目录映射：
 - `./data`: 应用数据目录
 - `./logs`: 应用日志目录
 - `./configs`: 配置文件目录
 
-## 📊 监控面板
-
-### Prometheus指标
-
-系统自动暴露以下监控指标：
-- `sshcollector_tasks_total`: 任务总数
-- `sshcollector_tasks_success_total`: 成功任务数
-- `sshcollector_tasks_failure_total`: 失败任务数
-- `sshcollector_connections_active`: 活跃连接数
-- `sshcollector_response_time_seconds`: 响应时间
-
-### Grafana仪表板
-
-预配置的监控面板包括：
-- 系统概览
-- 任务执行统计
-- 连接状态监控
-- 性能指标分析
-- 错误日志追踪
+ 
 
 ## 🔍 故障排查
 
@@ -331,7 +284,7 @@ Docker部署会创建以下持久化卷：
 1. **服务启动失败**
 ```bash
 # 查看服务日志
-./scripts/deploy.sh logs sshcollector
+./deploy/deploy.sh logs sshcollector
 
 # 检查配置文件
 cat configs/config.yaml
@@ -351,8 +304,6 @@ ssh username@target_host
 # 检查SQLite文件权限
 ls -la data/sshcollector.db
 
-# 检查Redis连接
-redis-cli -h redis_host ping
 ```
 
 ### 日志分析
@@ -387,13 +338,7 @@ database:
     conn_max_lifetime: 300 # 连接最大生命周期
 ```
 
-### 缓存配置
-```yaml
-redis:
-  pool_size: 10          # 连接池大小
-  min_idle_conns: 5      # 最小空闲连接
-  max_retries: 3         # 最大重试次数
-```
+ 
 
 ## 🔐 安全配置
 
@@ -448,7 +393,7 @@ security:
 | 方法 | 路径 | 描述 |
 |------|------|------|
 | GET | /health | 健康检查 |
-| GET | /metrics | Prometheus指标 |
+ 
 | GET | /api/stats | 系统统计 |
 
 ## 🤝 贡献指南

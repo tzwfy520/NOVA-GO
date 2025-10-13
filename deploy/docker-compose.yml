@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # SSH采集器服务
+  sshcollector:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: sshcollector
+    restart: unless-stopped
+    ports:
+      - "18000:18000"
+    environment:
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=18000
+      - DATABASE_SQLITE_PATH=/app/data/sshcollector.db
+      - LOG_LEVEL=info
+      - LOG_OUTPUT=file
+      - LOG_FILE_PATH=/app/logs/sshcollector.log
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
+      - ../configs:/app/configs
+    # 无外部依赖
+    networks:
+      - sshcollector-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 已移除 Redis 与 Nginx 服务
+
+  # 已移除 Prometheus 与 Grafana 服务
+
+volumes:
+
+networks:
+  sshcollector-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

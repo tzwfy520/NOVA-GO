@@ -41,8 +41,7 @@ const (
 
 // TaskType 任务类型枚举
 const (
-	TaskTypeSimple = "simple"
-	TaskTypeXXLJob = "xxljob"
+    TaskTypeSimple = "simple"
 )
 
 // TaskLog 任务日志

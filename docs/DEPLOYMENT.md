@@ -61,7 +61,7 @@ ps aux | grep sshcollector | grep -v grep
 netstat -tlnp | grep 8100
 
 # 测试健康检查接口
-curl -s http://localhost:8100/api/v1/health
+curl -s http://localhost:18000/api/v1/health
 ```
 
 ### 方式二：Docker容器化部署
@@ -87,7 +87,7 @@ rm -rf *
 tar -xzf /tmp/sshcollector-deploy.tar.gz
 
 # 构建Docker镜像（使用国内镜像源）
-GOPROXY=https://goproxy.cn,direct docker build -t sshcollector:latest .
+GOPROXY=https://goproxy.cn,direct docker build -f deploy/Dockerfile -t sshcollector:latest .
 ```
 
 #### 3. 运行容器
@@ -161,7 +161,7 @@ dial tcp 142.250.217.81:443: i/o timeout
 
 **解决方案**: 使用国内镜像源
 ```bash
-GOPROXY=https://goproxy.cn,direct docker build -t sshcollector:latest .
+GOPROXY=https://goproxy.cn,direct docker build -f deploy/Dockerfile -t sshcollector:latest .
 ```
 
 ## 服务管理
@@ -208,16 +208,16 @@ docker logs -f sshcollector
 ### 1. 健康检查
 ```bash
 # 本地测试
-curl -s http://localhost:8100/api/v1/health
+curl -s http://localhost:18000/api/v1/health
 
 # 外网测试
-curl -s http://115.190.80.219:8100/api/v1/health
+curl -s http://115.190.80.219:18000/api/v1/health
 ```
 
 ### 2. 设备采集测试
 ```bash
 # 测试华为设备采集
-curl -X POST http://localhost:8100/api/v1/collector/execute \
+curl -X POST http://localhost:18000/api/v1/collector/execute \
   -H "Content-Type: application/json" \
   -d '{
     "task_id": "test-001",
@@ -233,7 +233,7 @@ curl -X POST http://localhost:8100/api/v1/collector/execute \
 ### 3. 外网API测试
 ```bash
 # 从本地调用外网IP
-curl -X POST http://115.190.80.219:8100/api/v1/collector/execute \
+curl -X POST http://115.190.80.219:18000/api/v1/collector/execute \
   -H "Content-Type: application/json" \
   -d '{
     "task_id": "external-test-001",
@@ -272,7 +272,7 @@ database:
 ps aux | grep sshcollector
 
 # 查看端口状态
-netstat -tlnp | grep 8100
+netstat -tlnp | grep 18000
 
 # 查看系统负载
 top -p $(pgrep sshcollector)
@@ -282,8 +282,8 @@ top -p $(pgrep sshcollector)
 
 ### 1. 防火墙设置
 ```bash
-# 开放8100端口
-sudo ufw allow 8100/tcp
+# 开放18000端口
+sudo ufw allow 18000/tcp
 
 # 查看防火墙状态
 sudo ufw status
@@ -316,7 +316,7 @@ cat configs/config.yaml
 tail -f logs/app.log
 
 # 检查端口占用
-netstat -tlnp | grep 8100
+netstat -tlnp | grep 18000
 ```
 
 ### 2. SSH连接失败
@@ -334,7 +334,7 @@ ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no username@target_host
 htop
 
 # 查看网络连接
-ss -tuln | grep 8100
+ss -tuln | grep 18000
 
 # 查看磁盘使用
 df -h
@@ -401,20 +401,20 @@ nohup ./sshcollector > logs/app.log 2>&1 &
 **部署路径**: /opt/ssh-collector-pro  
 **Docker镜像**: ssh-collector-pro:latest  
 **容器名称**: ssh-collector-pro  
-**端口映射**: 8080:8100  
+**端口映射**: 18000:18000  
 
 #### 部署步骤
 1. **构建Docker镜像**
    ```bash
    # 在huoshan-1服务器上构建
    cd /opt/ssh-collector-pro
-   docker build -t ssh-collector-pro .
+   docker build -f deploy/Dockerfile -t ssh-collector-pro .
    ```
 
 2. **启动容器**
    ```bash
-   docker run -d --name ssh-collector-pro \
-     -p 8080:8100 \
+  docker run -d --name ssh-collector-pro \
+    -p 18000:18000 \
      -v $(pwd)/data:/app/data \
      -v $(pwd)/logs:/app/logs \
      -v $(pwd)/configs:/app/configs \
@@ -424,10 +424,10 @@ nohup ./sshcollector > logs/app.log 2>&1 &
 3. **验证部署**
    ```bash
    # 健康检查
-   curl -f http://115.190.80.219:8080/api/v1/health
+curl -f http://115.190.80.219:18000/api/v1/health
    
    # 设备采集测试
-   curl -X POST http://115.190.80.219:8080/api/v1/collector/execute \
+curl -X POST http://115.190.80.219:18000/api/v1/collector/execute \
      -H "Content-Type: application/json" \
      -d '{
        "task_id": "test-001",
@@ -443,7 +443,7 @@ nohup ./sshcollector > logs/app.log 2>&1 &
 #### 部署问题解决
 1. **Go代理超时**: 在Dockerfile中添加了国内代理设置
 2. **gcc编译器缺失**: 在构建镜像时安装了gcc和musl-dev
-3. **端口映射错误**: 修正了容器内外端口映射(8080:8100)
+3. **端口映射更新**: 统一为容器内外端口(18000:18000)
 4. **权限问题**: 设置了正确的文件权限(1001:1001)
 
 #### 容器管理命令

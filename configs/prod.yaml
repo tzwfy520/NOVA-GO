@@ -3,7 +3,7 @@
 # 服务器配置
 server:
   host: "0.0.0.0"
-  port: 8080
+  port: 18000
   mode: "release"
   read_timeout: 60s
   write_timeout: 60s
@@ -17,14 +17,6 @@ collector:
   threads: 20
   concurrent: 10
 
-# 控制器配置
-controller:
-  host: "${CONTROLLER_HOST}"
-  port: 9000
-  register_retry: 3
-  register_interval: 10s
-  heartbeat_interval: 3s
-  heartbeat_timeout: 9s
 
 # 数据库配置
 database:
@@ -34,17 +26,6 @@ database:
     max_open_conns: 200
     conn_max_lifetime: 3600s
 
-# Redis配置
-redis:
-  host: "${REDIS_HOST}"
-  port: 6379
-  password: "${REDIS_PASSWORD}"
-  db: 0
-  pool_size: 20
-  min_idle_conns: 10
-  dial_timeout: 5s
-  read_timeout: 3s
-  write_timeout: 3s
 
 # SSH配置
 ssh:
@@ -52,16 +33,6 @@ ssh:
   keep_alive_interval: 10s
   max_sessions: 200
 
-# XXL-Job配置
-xxljob:
-  admin_addresses: "${XXLJOB_ADMIN_ADDRESSES}"
-  access_token: "${XXLJOB_ACCESS_TOKEN}"
-  app_name: "ssh-collector"
-  address: ""
-  ip: ""
-  port: 9999
-  log_path: "/logs/xxljob"
-  log_retention_days: 30
 
 # 日志配置
 log:
