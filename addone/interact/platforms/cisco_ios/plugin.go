@@ -14,6 +14,21 @@ func (p *Plugin) Defaults() interact.InteractDefaults {
         Retries:    2,
         Threads:    4,
         Concurrent: 5,
+        PromptSuffixes:   []string{"#"},
+        CommandIntervalMS: 200,
+        AutoInteractions: []interact.AutoInteraction{
+            {ExpectOutput: "--more--", AutoSend: " "},
+            {ExpectOutput: "more", AutoSend: " "},
+            {ExpectOutput: "press any key", AutoSend: " "},
+            {ExpectOutput: "confirm", AutoSend: "y"},
+            {ExpectOutput: "[yes/no]", AutoSend: "yes"},
+        },
+        ErrorHints: []string{
+            "invalid input detected",
+            "incomplete command",
+            "ambiguous command",
+            "unknown command",
+        },
     }
 }
 

@@ -49,6 +49,16 @@ type CommandResult struct {
 type InteractiveOptions struct {
     EnablePassword string
     ExitCommands   []string
+    // 新增：命令间隔与自动交互
+    CommandIntervalMS int
+    AutoInteractions  []AutoInteraction
+}
+
+// AutoInteraction 自动交互对
+// 当输出包含 ExpectOutput（大小写不敏感）时，自动发送 AutoSend（通常为空格或确认）
+type AutoInteraction struct {
+    ExpectOutput string
+    AutoSend     string
 }
 
 // NewClient 创建SSH客户端
@@ -69,12 +79,14 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 		User:            info.Username,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         c.config.Timeout,
-		Config: ssh.Config{
+        Config: ssh.Config{
 			// 支持旧版本的密钥交换算法
 			KeyExchanges: []string{
 				"diffie-hellman-group14-sha256",
 				"diffie-hellman-group14-sha1",
 				"diffie-hellman-group1-sha1",
+				"diffie-hellman-group-exchange-sha256",
+				"diffie-hellman-group-exchange-sha1",
 				"ecdh-sha2-nistp256",
 				"ecdh-sha2-nistp384",
 				"ecdh-sha2-nistp521",
@@ -98,15 +110,33 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 				"hmac-sha1",
 				"hmac-sha1-96",
 			},
-		},
-	}
+        },
+        // 支持旧版本主机密钥算法
+        HostKeyAlgorithms: []string{
+            "ssh-rsa",
+            "rsa-sha2-256",
+            "rsa-sha2-512",
+            "ecdsa-sha2-nistp256",
+            "ecdsa-sha2-nistp384",
+            "ecdsa-sha2-nistp521",
+        },
+    }
 
-	// 设置认证方式
-	if info.Password != "" {
-		sshConfig.Auth = []ssh.AuthMethod{
-			ssh.Password(info.Password),
-		}
-	}
+    // 设置认证方式
+    if info.Password != "" {
+        // 同时尝试 password 与 keyboard-interactive，提高与网络设备的兼容性
+        sshConfig.Auth = []ssh.AuthMethod{
+            ssh.Password(info.Password),
+            ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+                // 对所有提示统一使用密码响应（常见于 H3C/Cisco 等设备）
+                answers := make([]string, len(questions))
+                for i := range questions {
+                    answers[i] = info.Password
+                }
+                return answers, nil
+            }),
+        }
+    }
 
 	if info.KeyFile != "" {
 		// TODO: 实现密钥文件认证
@@ -520,6 +550,18 @@ Ready:
                         }
                     }
                 }
+
+                // 自动交互：匹配提示后自动发送响应（如 more/confirm）
+                if opts != nil && len(opts.AutoInteractions) > 0 {
+                    for _, ai := range opts.AutoInteractions {
+                        if ai.ExpectOutput == "" || ai.AutoSend == "" { continue }
+                        if strings.Contains(lower, strings.ToLower(ai.ExpectOutput)) {
+                            _, _ = stdin.Write([]byte(ai.AutoSend + "\r\n"))
+                            // 继续读取输出直到提示符
+                            break
+                        }
+                    }
+                }
                 if isPrompt(line) {
                     // 到达提示符，认为该命令结束
                     results = append(results, &CommandResult{
@@ -544,6 +586,10 @@ Ready:
             }
         }
     NextCmd:
+        // 命令间隔控制（避免过快触发设备限流或分页）
+        if opts != nil && opts.CommandIntervalMS > 0 {
+            time.Sleep(time.Duration(opts.CommandIntervalMS) * time.Millisecond)
+        }
         // 继续处理下一条命令
     }
 

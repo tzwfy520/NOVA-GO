@@ -89,77 +89,160 @@
 
 > 注：上述命令清单来自各平台的采集插件 `SystemCommands()` 定义，可根据后续平台能力扩展。
 
-## 示例
+> 重要：原单设备接口已下线，请使用批量接口 `/api/v1/collector/batch/custom` 或 `/api/v1/collector/batch/system`。
 
-### 请求（system）
+## 说明
+- 当 `format_output` 为空对象或空数组时，表示该命令未匹配到格式化规则或无法解析。
+- `retry_flag` 与 `timeout` 为空时使用交互插件默认值；平台可自行覆盖默认值。
+
+---
+
+## 批量调用
+
+为满足批量场景与系统/自定义任务拆分，新增两类批量接口：
+
+### 自定义采集批量接口
+- 路径：`POST /api/v1/collector/batch/custom`
+- 输入参数：
+  - 统一参数：`task_id`、`task_name`、`retry_flag`、`timeout`
+  - 设备参数（按设备数量组织为数组 `devices`）：`device_ip`、`device_name`、`device_platform`、`collect_protocol`、`user_name`、`password`、`cli_list`
+- 输出参数：按设备组织输出，每个设备包含设备标识与该设备对应的采集执行结果。
+
+示例请求（custom/batch）：
 ```json
 {
-  "task_id": "t-1001",
-  "task_name": "daily-inventory",
-  "collect_origin": "system",
-  "device_ip": "10.0.0.1",
-  "device_name": "sw-core-1",
-  "device_platform": "huawei_s",
-  "collect_protocol": "ssh",
-  "user_name": "admin",
-  "password": "p@ssw0rd",
-  "enable_password": "enable123",
-  "cli_list": [],
-  "retry_flag": null,
-  "timeout": null
-}
-```
-
-### 请求（customer）
-```json
-{
-  "task_id": "t-1002",
-  "task_name": "quick-check",
-  "collect_origin": "customer",
-  "device_ip": "10.0.0.2",
-  "device_name": "ios-edge-1",
-  "device_platform": "cisco_ios",
-  "collect_protocol": "ssh",
-  "user_name": "ops",
-  "password": "xxxx",
-  "cli_list": ["show version", "show interfaces"],
+  "task_id": "T-2001",
+  "task_name": "custom-batch-check",
   "retry_flag": 2,
-  "timeout": 60
-}
-```
-
-### 响应（示例）
-```json
-{
-  "task_id": "t-1002",
-  "success": true,
-  "error": "",
-  "timestamp": "2025-10-13T10:20:30Z",
-  "result": [
+  "timeout": 60,
+  "devices": [
     {
-      "command": "show version",
-      "exit_code": 0,
-      "duration_ms": 1200,
-      "error": "",
-      "raw_output": "Cisco IOS Software, ...",
-      "format_output": {
-        "platform": "cisco_ios",
-        "table": "device_version",
-        "data": {"version": "15.2(4)E", "model": "C2960X"}
-      }
+      "device_ip": "10.0.0.2",
+      "device_name": "ios-edge-1",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "user_name": "ops",
+      "password": "xxxx",
+      "cli_list": ["show version", "show interfaces"]
     },
     {
-      "command": "show interfaces",
-      "exit_code": 0,
-      "duration_ms": 2300,
-      "error": "",
-      "raw_output": "GigabitEthernet0/1 is up, ...",
-      "format_output": {}
+      "device_ip": "10.0.0.3",
+      "device_name": "sw-agg-1",
+      "device_platform": "huawei_s",
+      "collect_protocol": "ssh",
+      "user_name": "ops",
+      "password": "yyyy",
+      "cli_list": ["display version"]
     }
   ]
 }
 ```
 
-## 说明
-- 当 `format_output` 为空对象或空数组时，表示该命令未匹配到格式化规则或无法解析。
-- `retry_flag` 与 `timeout` 为空时使用交互插件默认值；平台可自行覆盖默认值。
+示例响应（custom/batch）：
+```json
+{
+  "code": "SUCCESS",
+  "message": "自定义批量任务执行完成",
+  "total": 2,
+  "data": [
+    {
+      "device_ip": "10.0.0.2",
+      "device_name": "ios-edge-1",
+      "device_platform": "cisco_ios",
+      "task_id": "T-2001-1",
+      "success": true,
+      "results": [ /* 与单次接口 result 结构一致 */ ],
+      "error": "",
+      "duration_ms": 3400,
+      "timestamp": "2025-10-13T10:20:30Z"
+    },
+    {
+      "device_ip": "10.0.0.3",
+      "device_name": "sw-agg-1",
+      "device_platform": "huawei_s",
+      "task_id": "T-2001-2",
+      "success": true,
+      "results": [ /* 与单次接口 result 结构一致 */ ],
+      "error": "",
+      "duration_ms": 2100,
+      "timestamp": "2025-10-13T10:20:31Z"
+    }
+  ]
+}
+```
+
+> 说明：批量任务下的每个设备执行会自动生成子任务ID（示例为 `T-2001-1`、`T-2001-2`），用于区分与追踪；返回结果按设备维度组织。
+
+### 系统预制采集批量接口
+- 路径：`POST /api/v1/collector/batch/system`
+- 输入参数：
+  - 统一参数：`task_id`、`task_name`、`retry_flag`、`timeout`
+  - 设备参数数组 `device_list`：`device_ip`、`device_name`、`device_platform`（必填）、`collect_protocol`、`user_name`、`password`
+  - 可选扩展：`cli_list`（如提供，将在系统内置命令之后追加执行）
+- 输出参数：按设备组织输出，每个设备包含设备标识与该设备对应的系统预制采集执行结果。
+
+示例请求（system/batch）：
+```json
+{
+  "task_id": "T-3001",
+  "task_name": "system-batch-inventory",
+  "retry_flag": 1,
+  "timeout": 45,
+  "device_list": [
+    {
+      "device_ip": "10.0.1.10",
+      "device_name": "core-sw-1",
+      "device_platform": "huawei_s",
+      "collect_protocol": "ssh",
+      "user_name": "admin",
+      "password": "123456"
+    },
+    {
+      "device_ip": "10.0.1.20",
+      "device_name": "edge-ios-1",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "user_name": "ops",
+      "password": "abcd"
+    }
+  ]
+}
+```
+
+示例响应（system/batch）：
+```json
+{
+  "code": "SUCCESS",
+  "message": "系统预制批量任务执行完成",
+  "total": 2,
+  "data": [
+    {
+      "device_ip": "10.0.1.10",
+      "device_name": "core-sw-1",
+      "device_platform": "huawei_s",
+      "task_id": "T-3001-1",
+      "success": true,
+      "results": [ /* 与单次接口 result 结构一致 */ ],
+      "error": "",
+      "duration_ms": 2800,
+      "timestamp": "2025-10-13T10:21:00Z"
+    },
+    {
+      "device_ip": "10.0.1.20",
+      "device_name": "edge-ios-1",
+      "device_platform": "cisco_ios",
+      "task_id": "T-3001-2",
+      "success": true,
+      "results": [ /* 与单次接口 result 结构一致 */ ],
+      "error": "",
+      "duration_ms": 3200,
+      "timestamp": "2025-10-13T10:21:02Z"
+    }
+  ]
+}
+```
+
+> 说明：`collect_origin` 不再作为批量接口入参传递，由接口路径隐式决定（`/batch/custom` → `customer`，`/batch/system` → `system`）。系统预制接口要求 `device_platform` 必填，并按平台内置命令执行，可追加 `cli_list` 扩展。
+
+### 兼容性
+- 原单设备接口已移除；通用批量接口（`POST /api/v1/collector/batch`）保留，建议迁移到拆分后的批量接口以获得更清晰的语义。

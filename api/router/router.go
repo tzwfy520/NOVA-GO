@@ -48,8 +48,10 @@ func SetupRouter(collectorService *service.CollectorService) *gin.Engine {
 		// 采集器相关路由
 		collector := v1.Group("/collector")
 		{
-			collector.POST("/execute", collectorHandler.ExecuteTask)
 			collector.POST("/batch", collectorHandler.BatchExecute)
+			// 新增拆封后的批量接口
+			collector.POST("/batch/custom", collectorHandler.BatchExecuteCustomer)
+			collector.POST("/batch/system", collectorHandler.BatchExecuteSystem)
 			collector.GET("/task/:task_id/status", collectorHandler.GetTaskStatus)
 			collector.POST("/task/:task_id/cancel", collectorHandler.CancelTask)
 			collector.GET("/stats", collectorHandler.GetStats)

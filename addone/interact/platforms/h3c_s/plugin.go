@@ -13,6 +13,14 @@ func (p *Plugin) Defaults() interact.InteractDefaults {
         Retries:    2,
         Threads:    4,
         Concurrent: 5,
+        PromptSuffixes:   []string{">"},
+        CommandIntervalMS: 150,
+        AutoInteractions: []interact.AutoInteraction{
+            {ExpectOutput: "more", AutoSend: " "},
+            {ExpectOutput: "press any key", AutoSend: " "},
+            {ExpectOutput: "confirm", AutoSend: "y"},
+        },
+        ErrorHints: []string{"error", "unrecognized command", "incomplete"},
     }
 }
 

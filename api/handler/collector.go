@@ -27,50 +27,7 @@ func NewCollectorHandler(collectorService *service.CollectorService) *CollectorH
 // @Summary 执行设备采集任务
 // @Description 通过SSH连接设备并执行指定命令
 // @Tags collector
-// @Accept json
-// @Produce json
-// @Param request body service.CollectRequest true "采集请求"
-// @Success 200 {object} service.CollectResponse "采集成功"
-// @Failure 400 {object} ErrorResponse "请求参数错误"
-// @Failure 500 {object} ErrorResponse "服务器内部错误"
-// @Router /api/v1/collector/execute [post]
-func (h *CollectorHandler) ExecuteTask(c *gin.Context) {
-    var request service.CollectRequest
-    if err := c.ShouldBindJSON(&request); err != nil {
-		logger.Error("Invalid request parameters", "error", err)
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Code:    "INVALID_PARAMS",
-			Message: "请求参数无效: " + err.Error(),
-		})
-		return
-	}
-
-    // 参数验证
-    if err := h.validateCollectRequest(&request); err != nil {
-		logger.Error("Request validation failed", "error", err)
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Code:    "VALIDATION_FAILED",
-			Message: err.Error(),
-		})
-		return
-	}
-
-    // 创建上下文（超时在服务层根据插件默认或传入参数处理）
-    ctx := c.Request.Context()
-
-	// 执行采集任务
-    response, err := h.collectorService.ExecuteTask(ctx, &request)
-	if err != nil {
-		logger.Error("Failed to execute task", "task_id", request.TaskID, "error", err)
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Code:    "EXECUTION_FAILED",
-			Message: "任务执行失败: " + err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, response)
-}
+// 单设备接口已移除；请使用 /api/v1/collector/batch/custom 或 /api/v1/collector/batch/system
 
 // GetTaskStatus 获取任务状态
 // @Summary 获取任务执行状态
@@ -270,6 +227,260 @@ func (h *CollectorHandler) BatchExecute(c *gin.Context) {
 		"data":    responses,
 		"total":   len(responses),
 	})
+}
+
+// CustomerBatchRequest 自定义采集批量请求
+type CustomerBatchRequest struct {
+    TaskID    string           `json:"task_id"`
+    TaskName  string           `json:"task_name,omitempty"`
+    RetryFlag *int             `json:"retry_flag,omitempty"`
+    Timeout   *int             `json:"timeout,omitempty"`
+    Devices   []CustomerDevice `json:"devices"`
+}
+
+// CustomerDevice 自定义采集设备参数
+type CustomerDevice struct {
+    DeviceIP        string   `json:"device_ip"`
+    Port            int      `json:"port,omitempty"`
+    DeviceName      string   `json:"device_name,omitempty"`
+    DevicePlatform  string   `json:"device_platform,omitempty"`
+    CollectProtocol string   `json:"collect_protocol,omitempty"`
+    UserName        string   `json:"user_name"`
+    Password        string   `json:"password"`
+    CliList         []string `json:"cli_list"`
+}
+
+// SystemBatchRequest 系统预制采集批量请求
+type SystemBatchRequest struct {
+    TaskID    string         `json:"task_id"`
+    TaskName  string         `json:"task_name,omitempty"`
+    RetryFlag *int           `json:"retry_flag,omitempty"`
+    Timeout   *int           `json:"timeout,omitempty"`
+    DeviceList []SystemDevice `json:"device_list"`
+}
+
+// SystemDevice 系统预制采集设备参数（cli_list 可选扩展）
+type SystemDevice struct {
+    DeviceIP        string   `json:"device_ip"`
+    Port            int      `json:"port,omitempty"`
+    DeviceName      string   `json:"device_name,omitempty"`
+    DevicePlatform  string   `json:"device_platform"`
+    CollectProtocol string   `json:"collect_protocol,omitempty"`
+    UserName        string   `json:"user_name"`
+    Password        string   `json:"password"`
+    CliList         []string `json:"cli_list,omitempty"`
+}
+
+// BatchExecuteCustomer 自定义采集批量接口
+// @Summary 自定义采集批量执行
+// @Description 批量提交多个设备的自定义采集任务
+// @Tags collector
+// @Accept json
+// @Produce json
+// @Param request body CustomerBatchRequest true "自定义批量采集请求"
+// @Success 200 {object} map[string]interface{} "批量采集结果，按设备组织"
+// @Failure 400 {object} ErrorResponse "请求参数错误"
+// @Failure 500 {object} ErrorResponse "服务器内部错误"
+// @Router /api/v1/collector/batch/custom [post]
+func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
+    var req CustomerBatchRequest
+    if err := c.ShouldBindJSON(&req); err != nil {
+        logger.Error("Invalid custom batch request", "error", err)
+        c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "请求参数无效: " + err.Error()})
+        return
+    }
+
+    if strings.TrimSpace(req.TaskID) == "" {
+        c.JSON(http.StatusBadRequest, ErrorResponse{Code: "MISSING_TASK_ID", Message: "任务ID不能为空"})
+        return
+    }
+    if len(req.Devices) == 0 {
+        c.JSON(http.StatusBadRequest, ErrorResponse{Code: "EMPTY_DEVICES", Message: "设备列表不能为空"})
+        return
+    }
+    if len(req.Devices) > 200 {
+        c.JSON(http.StatusBadRequest, ErrorResponse{Code: "TOO_MANY_DEVICES", Message: "批量设备数量不能超过200"})
+        return
+    }
+
+    responses := make([]map[string]interface{}, 0, len(req.Devices))
+    ctx := c.Request.Context()
+    for i, d := range req.Devices {
+        // 组装单设备请求（customer）
+        r := service.CollectRequest{
+            TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
+            TaskName:        req.TaskName,
+            CollectOrigin:   "customer",
+            DeviceIP:        d.DeviceIP,
+            Port:            d.Port,
+            DeviceName:      d.DeviceName,
+            DevicePlatform:  d.DevicePlatform,
+            CollectProtocol: d.CollectProtocol,
+            UserName:        d.UserName,
+            Password:        d.Password,
+            CliList:         d.CliList,
+            RetryFlag:       req.RetryFlag,
+            Timeout:         req.Timeout,
+            Metadata:        map[string]interface{}{"batch_task_id": req.TaskID},
+        }
+
+        if err := h.validateCollectRequest(&r); err != nil {
+            responses = append(responses, map[string]interface{}{
+                "device_ip":       d.DeviceIP,
+                "device_name":     d.DeviceName,
+                "device_platform": d.DevicePlatform,
+                "success":         false,
+                "error":           "参数验证失败: " + err.Error(),
+                "task_id":         r.TaskID,
+                "timestamp":       time.Now(),
+            })
+            continue
+        }
+
+        resp, err := h.collectorService.ExecuteTask(ctx, &r)
+        if err != nil {
+            resp = &service.CollectResponse{
+                TaskID:    r.TaskID,
+                Success:   false,
+                Error:     err.Error(),
+                Timestamp: time.Now(),
+            }
+        }
+
+        responses = append(responses, map[string]interface{}{
+            "device_ip":       d.DeviceIP,
+            "device_name":     d.DeviceName,
+            "device_platform": d.DevicePlatform,
+            "task_id":         resp.TaskID,
+            "success":         resp.Success,
+            "results":         resp.Results,
+            "error":           resp.Error,
+            "duration_ms":     resp.DurationMS,
+            "timestamp":       resp.Timestamp,
+        })
+    }
+
+    // 汇总成功/失败以确定顶层返回码
+    successCount := 0
+    for _, r := range responses {
+        if s, ok := r["success"].(bool); ok && s {
+            successCount++
+        }
+    }
+
+    respCode := "SUCCESS"
+    respMsg := "自定义批量任务执行完成"
+    if successCount == 0 {
+        respCode = "FAILED"
+        respMsg = "自定义批量任务全部失败"
+    } else if successCount < len(responses) {
+        respCode = "PARTIAL_SUCCESS"
+        respMsg = "自定义批量任务部分成功"
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "code":    respCode,
+        "message": respMsg,
+        "data":    responses,
+        "total":   len(responses),
+    })
+}
+
+// BatchExecuteSystem 系统预制采集批量接口
+// @Summary 系统预制采集批量执行
+// @Description 批量提交多个设备的系统预制采集任务
+// @Tags collector
+// @Accept json
+// @Produce json
+// @Param request body SystemBatchRequest true "系统预制批量采集请求"
+// @Success 200 {object} map[string]interface{} "批量采集结果，按设备组织"
+// @Failure 400 {object} ErrorResponse "请求参数错误"
+// @Failure 500 {object} ErrorResponse "服务器内部错误"
+// @Router /api/v1/collector/batch/system [post]
+func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
+    var req SystemBatchRequest
+    if err := c.ShouldBindJSON(&req); err != nil {
+        logger.Error("Invalid system batch request", "error", err)
+        c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "请求参数无效: " + err.Error()})
+        return
+    }
+
+    if strings.TrimSpace(req.TaskID) == "" {
+        c.JSON(http.StatusBadRequest, ErrorResponse{Code: "MISSING_TASK_ID", Message: "任务ID不能为空"})
+        return
+    }
+    if len(req.DeviceList) == 0 {
+        c.JSON(http.StatusBadRequest, ErrorResponse{Code: "EMPTY_DEVICES", Message: "设备列表不能为空"})
+        return
+    }
+    if len(req.DeviceList) > 200 {
+        c.JSON(http.StatusBadRequest, ErrorResponse{Code: "TOO_MANY_DEVICES", Message: "批量设备数量不能超过200"})
+        return
+    }
+
+    responses := make([]map[string]interface{}, 0, len(req.DeviceList))
+    ctx := c.Request.Context()
+    for i, d := range req.DeviceList {
+        // 组装单设备请求（system）
+        r := service.CollectRequest{
+            TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
+            TaskName:        req.TaskName,
+            CollectOrigin:   "system",
+            DeviceIP:        d.DeviceIP,
+            Port:            d.Port,
+            DeviceName:      d.DeviceName,
+            DevicePlatform:  d.DevicePlatform,
+            CollectProtocol: d.CollectProtocol,
+            UserName:        d.UserName,
+            Password:        d.Password,
+            CliList:         d.CliList, // 允许系统命令后追加
+            RetryFlag:       req.RetryFlag,
+            Timeout:         req.Timeout,
+            Metadata:        map[string]interface{}{"batch_task_id": req.TaskID},
+        }
+
+        if err := h.validateCollectRequest(&r); err != nil {
+            responses = append(responses, map[string]interface{}{
+                "device_ip":       d.DeviceIP,
+                "device_name":     d.DeviceName,
+                "device_platform": d.DevicePlatform,
+                "success":         false,
+                "error":           "参数验证失败: " + err.Error(),
+                "task_id":         r.TaskID,
+                "timestamp":       time.Now(),
+            })
+            continue
+        }
+
+        resp, err := h.collectorService.ExecuteTask(ctx, &r)
+        if err != nil {
+            resp = &service.CollectResponse{
+                TaskID:    r.TaskID,
+                Success:   false,
+                Error:     err.Error(),
+                Timestamp: time.Now(),
+            }
+        }
+
+        responses = append(responses, map[string]interface{}{
+            "device_ip":       d.DeviceIP,
+            "device_name":     d.DeviceName,
+            "device_platform": d.DevicePlatform,
+            "task_id":         resp.TaskID,
+            "success":         resp.Success,
+            "results":         resp.Results,
+            "error":           resp.Error,
+            "duration_ms":     resp.DurationMS,
+            "timestamp":       resp.Timestamp,
+        })
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "code":    "SUCCESS",
+        "message": "系统预制批量任务执行完成",
+        "data":    responses,
+        "total":   len(responses),
+    })
 }
 
 // validateCollectRequest 验证采集请求参数

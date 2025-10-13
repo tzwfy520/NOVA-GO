@@ -328,12 +328,18 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
     defer s.sshPool.ReleaseConnection(connInfo)
 
     // 系统默认：使用单一交互式会话(PTY)执行整批命令
-    promptSuffixes := []string{"#", ">", "]"}
+    // 优先使用交互插件提供的提示符后缀与参数
     platform := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
-    if strings.HasPrefix(platform, "cisco") {
-        promptSuffixes = []string{"#"}
-    } else if strings.HasPrefix(platform, "h3c") || strings.HasPrefix(platform, "huawei") {
-        promptSuffixes = []string{">"}
+    interactPlugin := interact.Get(func() string { if platform=="" { return "default" } ; return platform }())
+    defaults := interactPlugin.Defaults()
+    promptSuffixes := defaults.PromptSuffixes
+    if len(promptSuffixes) == 0 {
+        promptSuffixes = []string{"#", ">", "]"}
+        if strings.HasPrefix(platform, "cisco") {
+            promptSuffixes = []string{"#"}
+        } else if strings.HasPrefix(platform, "h3c") || strings.HasPrefix(platform, "huawei") {
+            promptSuffixes = []string{">"}
+        }
     }
 
     // 在交互会话中自动处理 Cisco enable 密码（如提供）
@@ -348,6 +354,17 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
         interactiveOpts.ExitCommands = []string{"quit", "exit"}
     } else {
         interactiveOpts.ExitCommands = []string{"exit", "quit"}
+    }
+    // 应用插件默认的命令间隔与自动交互配置
+    if defaults.CommandIntervalMS > 0 { interactiveOpts.CommandIntervalMS = defaults.CommandIntervalMS }
+    if len(defaults.AutoInteractions) > 0 {
+        // 类型映射到 ssh.AutoInteraction
+        mapped := make([]ssh.AutoInteraction, 0, len(defaults.AutoInteractions))
+        for _, ai := range defaults.AutoInteractions {
+            if ai.ExpectOutput == "" || ai.AutoSend == "" { continue }
+            mapped = append(mapped, ssh.AutoInteraction{ExpectOutput: ai.ExpectOutput, AutoSend: ai.AutoSend})
+        }
+        interactiveOpts.AutoInteractions = mapped
     }
     rawResults, err := client.ExecuteInteractiveCommands(ctx, commands, promptSuffixes, interactiveOpts)
     if err != nil {
