@@ -394,6 +394,32 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
     plugin := collect.Get(platform)
     out := make([]*CommandResultView, 0, len(rawResults))
     origin := strings.TrimSpace(strings.ToLower(request.CollectOrigin))
+    // 辅助：移除分页提示行（如 more/--more--）避免污染原始输出
+    stripPagerPrompts := func(s string) string {
+        if s == "" { return s }
+        lines := strings.Split(s, "\n")
+        out := make([]string, 0, len(lines))
+        for _, line := range lines {
+            t := strings.TrimSpace(line)
+            lt := strings.ToLower(t)
+            // 过滤常见分页提示
+            // 1) 纯 more 行
+            if lt == "more" {
+                continue
+            }
+            // 2) Cisco/部分设备的 --more-- 提示（大小写不敏感，示例："--More--"）
+            if strings.Contains(lt, "--more--") {
+                continue
+            }
+            // 3) H3C/华为等设备的页提示前缀："---- More ----"（起始字符匹配）
+            if strings.HasPrefix(lt, "---- more ----") {
+                continue
+            }
+            out = append(out, line)
+        }
+        return strings.Join(out, "\n")
+    }
+
     for _, r := range rawResults {
         status := model.TaskStatusSuccess
         if r == nil || r.ExitCode != 0 { status = model.TaskStatusFailed }
@@ -420,7 +446,7 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
         }
         view := &CommandResultView{
             Command:      cmdVal,
-            RawOutput:    func() string { if r!=nil { return r.Output } ; return "" }(),
+            RawOutput:    func() string { if r!=nil { return stripPagerPrompts(r.Output) } ; return "" }(),
             FormatOutput: fmtRows,
             Error:        func() string { if r!=nil { return r.Error } ; return "" }(),
             ExitCode:     func() int { if r!=nil { return r.ExitCode } ; return -1 }(),
