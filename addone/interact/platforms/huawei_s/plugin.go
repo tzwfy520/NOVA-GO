@@ -14,8 +14,8 @@ func (p *Plugin) Defaults() interact.InteractDefaults {
         Retries:    2,
         Threads:    4,
         Concurrent: 5,
-        PromptSuffixes:   []string{">"},
-        CommandIntervalMS: 150,
+        PromptSuffixes:   []string{">", "#", "]"},
+        CommandIntervalMS: 300,
         AutoInteractions: []interact.AutoInteraction{
             {ExpectOutput: "more", AutoSend: " "},
             {ExpectOutput: "press any key", AutoSend: " "},

@@ -1,6 +1,7 @@
 package handler
 
 import (
+    "encoding/json"
     "fmt"
     "net/http"
     "strings"
@@ -378,7 +379,12 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
         respMsg = "自定义批量任务部分成功"
     }
 
-    c.JSON(http.StatusOK, gin.H{
+    // 使用自定义编码器关闭 HTML 转义，避免 \u003c/\u003e 等转义影响原始输出可读性
+    c.Header("Content-Type", "application/json")
+    c.Status(http.StatusOK)
+    enc := json.NewEncoder(c.Writer)
+    enc.SetEscapeHTML(false)
+    _ = enc.Encode(gin.H{
         "code":    respCode,
         "message": respMsg,
         "data":    responses,
