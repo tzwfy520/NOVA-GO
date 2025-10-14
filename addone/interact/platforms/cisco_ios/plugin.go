@@ -1,6 +1,9 @@
 package cisco_ios
 
-import "github.com/sshcollectorpro/sshcollectorpro/addone/interact"
+import (
+    "strings"
+    "github.com/sshcollectorpro/sshcollectorpro/addone/interact"
+)
 
 // Plugin 为 cisco_ios 平台交互插件
 type Plugin struct{}
@@ -14,7 +17,8 @@ func (p *Plugin) Defaults() interact.InteractDefaults {
         Retries:    2,
         Threads:    4,
         Concurrent: 5,
-        PromptSuffixes:   []string{"#"},
+        // 同时匹配用户 EXEC 模式 '>' 与特权模式 '#'
+        PromptSuffixes:   []string{">", "#"},
         CommandIntervalMS: 200,
         AutoInteractions: []interact.AutoInteraction{
             {ExpectOutput: "--more--", AutoSend: " "},
@@ -46,9 +50,28 @@ func (p *Plugin) TransformCommands(in interact.CommandTransformInput) interact.C
     }
     pre = append(pre, "terminal length 0")
 
-    out := make([]string, 0, len(in.Commands)+len(pre))
+    // 规范化用户命令，兼容常见缩写与误写
+    // 将 show run / show runn / show running 等同规范为 show running-config
+    normalized := make([]string, 0, len(in.Commands))
+    for _, c := range in.Commands {
+        trimmed := strings.TrimSpace(c)
+        low := strings.ToLower(trimmed)
+        switch low {
+        case "show run", "show running", "show runn":
+            normalized = append(normalized, "show running-config")
+        default:
+            // 宽松匹配误写：以 "show runn" 开头也归一化
+            if strings.HasPrefix(low, "show runn") {
+                normalized = append(normalized, "show running-config")
+            } else {
+                normalized = append(normalized, trimmed)
+            }
+        }
+    }
+
+    out := make([]string, 0, len(normalized)+len(pre))
     out = append(out, pre...)
-    out = append(out, in.Commands...)
+    out = append(out, normalized...)
     return interact.CommandTransformOutput{Commands: out}
 }
 

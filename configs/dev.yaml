@@ -16,6 +16,27 @@ collector:
   tags: ["development", "ssh"]
   threads: 5
   concurrent: 3
+  # 原始输出过滤规则（按行移除）
+  output_filter:
+    prefixes:
+      - "---- More ----"
+      - "more"
+    contains:
+      - "--more--"
+    case_insensitive: true
+    trim_space: true
+  # 交互配置：自动交互与错误提示
+  interact:
+    auto_interactions:
+      - except_output: "do you want to save this config? yes/no"
+        command_auto_send: "yes"
+      - except_output: "do you want to reload this device? yes/no"
+        command_auto_send: "no"
+    error_hints:
+      - "ERROR:"
+      - "invalid parameters detect"
+    case_insensitive: true
+    trim_space: true
 
 
 # 数据库配置

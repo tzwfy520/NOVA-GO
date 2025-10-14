@@ -236,6 +236,7 @@ type CustomerBatchRequest struct {
     TaskName  string           `json:"task_name,omitempty"`
     RetryFlag *int             `json:"retry_flag,omitempty"`
     Timeout   *int             `json:"timeout,omitempty"`
+    CliList   []string         `json:"cli_list"`
     Devices   []CustomerDevice `json:"devices"`
 }
 
@@ -248,7 +249,7 @@ type CustomerDevice struct {
     CollectProtocol string   `json:"collect_protocol,omitempty"`
     UserName        string   `json:"user_name"`
     Password        string   `json:"password"`
-    CliList         []string `json:"cli_list"`
+    EnablePassword  string   `json:"enable_password,omitempty"`
 }
 
 // SystemBatchRequest 系统预制采集批量请求
@@ -269,6 +270,7 @@ type SystemDevice struct {
     CollectProtocol string   `json:"collect_protocol,omitempty"`
     UserName        string   `json:"user_name"`
     Password        string   `json:"password"`
+    EnablePassword  string   `json:"enable_password,omitempty"`
     CliList         []string `json:"cli_list,omitempty"`
 }
 
@@ -319,7 +321,8 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
             CollectProtocol: d.CollectProtocol,
             UserName:        d.UserName,
             Password:        d.Password,
-            CliList:         d.CliList,
+            EnablePassword:  d.EnablePassword,
+            CliList:         req.CliList,
             RetryFlag:       req.RetryFlag,
             Timeout:         req.Timeout,
             Metadata:        map[string]interface{}{"batch_task_id": req.TaskID},
@@ -328,6 +331,7 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
         if err := h.validateCollectRequest(&r); err != nil {
             responses = append(responses, map[string]interface{}{
                 "device_ip":       d.DeviceIP,
+                "port":            d.Port,
                 "device_name":     d.DeviceName,
                 "device_platform": d.DevicePlatform,
                 "success":         false,
@@ -350,6 +354,7 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 
         responses = append(responses, map[string]interface{}{
             "device_ip":       d.DeviceIP,
+            "port":            d.Port,
             "device_name":     d.DeviceName,
             "device_platform": d.DevicePlatform,
             "task_id":         resp.TaskID,
@@ -439,6 +444,7 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
             CollectProtocol: d.CollectProtocol,
             UserName:        d.UserName,
             Password:        d.Password,
+            EnablePassword:  d.EnablePassword,
             CliList:         d.CliList, // 允许系统命令后追加
             RetryFlag:       req.RetryFlag,
             Timeout:         req.Timeout,
@@ -470,6 +476,7 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 
         responses = append(responses, map[string]interface{}{
             "device_ip":       d.DeviceIP,
+            "port":            d.Port,
             "device_name":     d.DeviceName,
             "device_platform": d.DevicePlatform,
             "task_id":         resp.TaskID,

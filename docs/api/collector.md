@@ -104,9 +104,9 @@
 ### 自定义采集批量接口
 - 路径：`POST /api/v1/collector/batch/custom`
 - 输入参数：
-  - 统一参数：`task_id`、`task_name`、`retry_flag`、`timeout`
-  - 设备参数（按设备数量组织为数组 `devices`）：`device_ip`、`device_name`、`device_platform`、`collect_protocol`、`user_name`、`password`、`cli_list`
-- 输出参数：按设备组织输出，每个设备包含设备标识与该设备对应的采集执行结果。
+  - 统一参数：`task_id`、`task_name`、`retry_flag`、`timeout`、`cli_list`
+  - 设备参数（按设备数量组织为数组 `devices`）：`device_ip`、`device_name`、`device_platform`、`collect_protocol`、`user_name`、`password`、`port`
+ - 输出参数：按设备组织输出，每个设备包含设备标识与该设备对应的采集执行结果；新增 `port` 字段标识设备登陆端口。
 
 示例请求（custom/batch）：
 ```json
@@ -115,6 +115,7 @@
   "task_name": "custom-batch-check",
   "retry_flag": 2,
   "timeout": 60,
+  "cli_list": ["show version", "show interfaces"],
   "devices": [
     {
       "device_ip": "10.0.0.2",
@@ -123,7 +124,7 @@
       "collect_protocol": "ssh",
       "user_name": "ops",
       "password": "xxxx",
-      "cli_list": ["show version", "show interfaces"]
+      "port": 22
     },
     {
       "device_ip": "10.0.0.3",
@@ -132,7 +133,7 @@
       "collect_protocol": "ssh",
       "user_name": "ops",
       "password": "yyyy",
-      "cli_list": ["display version"]
+      "port": 2222
     }
   ]
 }
@@ -147,6 +148,7 @@
   "data": [
     {
       "device_ip": "10.0.0.2",
+      "port": 22,
       "device_name": "ios-edge-1",
       "device_platform": "cisco_ios",
       "task_id": "T-2001-1",
@@ -158,6 +160,7 @@
     },
     {
       "device_ip": "10.0.0.3",
+      "port": 2222,
       "device_name": "sw-agg-1",
       "device_platform": "huawei_s",
       "task_id": "T-2001-2",
@@ -218,6 +221,7 @@
   "data": [
     {
       "device_ip": "10.0.1.10",
+      "port": 22,
       "device_name": "core-sw-1",
       "device_platform": "huawei_s",
       "task_id": "T-3001-1",
@@ -229,6 +233,7 @@
     },
     {
       "device_ip": "10.0.1.20",
+      "port": 22,
       "device_name": "edge-ios-1",
       "device_platform": "cisco_ios",
       "task_id": "T-3001-2",

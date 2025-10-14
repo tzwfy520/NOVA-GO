@@ -473,6 +473,86 @@ docker rm ssh-collector-pro
 **测试状态**: ✅ 通过  
 **外网访问**: ✅ 正常  
 
+## 输出过滤规则配置（可选）
+
+为避免设备分页提示污染原始输出（例如 `--More--`、`---- More ----`、`more`），系统提供可配置的行级过滤规则。通过在配置文件的 `collector.output_filter` 中定义两类匹配规则即可：
+
+- 前缀匹配：当某行以指定前缀开始时移除该行。
+- 包含匹配：当某行包含指定子串时移除该行。
+
+示例（`configs/config.yaml`/`dev.yaml`/`prod.yaml`）：
+
+```yaml
+collector:
+  # ... 其他配置
+  output_filter:
+    # 前缀匹配：行以这些前缀开始则移除
+    prefixes:
+      - "---- More ----"
+      - "more"
+    # 包含匹配：行包含这些子串则移除
+    contains:
+      - "--more--"
+    # 匹配选项
+    case_insensitive: true   # 忽略大小写（建议开启）
+    trim_space: true         # 匹配前先去除首尾空格（建议开启）
+```
+
+说明：
+- 该过滤在采集服务层统一生效，对所有平台与命令的原始输出按行处理。
+- 可以根据实际设备的分页提示样式增删条目，支持多前缀与多子串。
+- 修改配置后需重启服务使其生效。
+
+重启示例：
+
+```bash
+# 直接部署
+pkill -f sshcollector || true
+nohup ./sshcollector > logs/app.log 2>&1 &
+
+# Docker 部署
+docker restart sshcollector-pro
+```
+
+## 交互配置（自动交互与错误提示）
+
+将交互式会话的自动响应与命令错误提示统一配置到 `collector.interact`，在不同环境的 `configs/*.yaml` 中按需调整。
+
+- 自动执行交互参数对：当设备输出包含指定字符串（大小写可不敏感）时，自动发送对应命令（如确认提示）。
+- 命令错误提示：当设备回显以列表中的字符串开头时，标记命令可能错误，并在结果的 `error` 字段给出提示。
+
+示例（`configs/config.yaml`/`dev.yaml`/`prod.yaml`）：
+
+```yaml
+collector:
+  interact:
+    auto_interactions:
+      - except_output: "do you want to save this config? yes/no"
+        command_auto_send: "yes"
+      - except_output: "do you want to reload this device? yes/no"
+        command_auto_send: "no"
+    error_hints:
+      - "ERROR:"
+      - "invalid parameters detect"
+    case_insensitive: true
+    trim_space: true
+```
+
+行为说明：
+- `auto_interactions`：如配置存在，则覆盖平台插件默认的自动交互规则；为空时使用插件默认值。
+- `error_hints`：逐行匹配设备回显，满足“开头匹配”则将该行作为命令错误提示写入结果的 `error` 字段（不更改系统返回的 `exit_code`）。
+- `case_insensitive`/`trim_space`：同时作用于两类匹配，提升鲁棒性。
+
+应用配置后，请重启服务：
+
+```bash
+pkill -f sshcollector || true
+nohup ./sshcollector > logs/app.log 2>&1 &
+
+# 或 Docker 部署
+docker restart sshcollector-pro
+```
+
 ## 联系信息
 
 如有问题，请联系运维团队或查看项目文档。

@@ -20,10 +20,12 @@ type Config struct {
 
 // Client SSH客户端
 type Client struct {
-	config     *Config
-	connection *ssh.Client
-	sessions   map[string]*ssh.Session
-	mutex      sync.RWMutex
+    config     *Config
+    connection *ssh.Client
+    sessions   map[string]*ssh.Session
+    mutex      sync.RWMutex
+    // 保存最近一次成功连接的参数，用于在会话创建失败（如 EOF）时自动重连
+    info       *ConnectionInfo
 }
 
 // ConnectionInfo SSH连接信息
@@ -71,8 +73,11 @@ func NewClient(config *Config) *Client {
 
 // Connect 连接SSH服务器
 func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+    c.mutex.Lock()
+    defer c.mutex.Unlock()
+
+    // 记录连接参数以便后续自动重连
+    c.info = info
 
 	// 构建SSH配置
 	sshConfig := &ssh.ClientConfig{
@@ -163,30 +168,73 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 
 	c.connection = ssh.NewClient(sshConn, chans, reqs)
 
-	// 启动保活机制
-	go c.keepAlive(ctx)
+    // 启动保活机制
+    go c.keepAlive(ctx)
 
-	return nil
+    return nil
+}
+
+// newSessionWithRetry 创建会话（带重试）
+// 针对部分网络设备首次或快速连续打开会话通道可能返回
+// "ssh: rejected: administratively prohibited (open failed)" 的情况，
+// 进行短延迟重试以提高稳定性。
+func (c *Client) newSessionWithRetry() (*ssh.Session, error) {
+    if c.connection == nil {
+        return nil, fmt.Errorf("SSH connection not established")
+    }
+
+    // 退避策略：立即、200ms、500ms、1s、2s，共5次
+    backoffs := []time.Duration{0, 200 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+    var lastErr error
+    for _, d := range backoffs {
+        if d > 0 {
+            time.Sleep(d)
+        }
+        sess, err := c.connection.NewSession()
+        if err == nil {
+            return sess, nil
+        }
+        lastErr = err
+        // 若错误不是通道被管理拒绝/打开失败，继续有限次重试以防瞬时状态
+        // 主要针对 "administratively prohibited"/"open failed" 文案做退避
+        msg := strings.ToLower(err.Error())
+        // 包含 EOF 也作为可重试错误（部分设备在登录后短时间内打开会话会返回 EOF）
+        if strings.Contains(msg, "eof") && c.info != nil {
+            // 尝试一次自动重连：关闭旧连接后根据保存的参数重建连接
+            // 使用 SSH 配置的 Timeout 作为重连的超时窗口
+            _ = c.Close()
+            ctx, cancel := context.WithTimeout(context.Background(), c.config.Timeout)
+            // 忽略重连错误并继续后续退避，如果重连成功则下一次循环可能成功创建会话
+            _ = c.Connect(ctx, c.info)
+            cancel()
+            // 短暂等待以让设备端就绪
+            time.Sleep(200 * time.Millisecond)
+            // 继续进入下一次退避尝试
+            continue
+        }
+        // 非典型错误也尝试后续退避，但不额外处理
+    }
+    return nil, lastErr
 }
 
 // ExecuteCommand 执行单个命令
 func (c *Client) ExecuteCommand(ctx context.Context, command string) (*CommandResult, error) {
-	if c.connection == nil {
-		return nil, fmt.Errorf("SSH connection not established")
-	}
+    if c.connection == nil {
+        return nil, fmt.Errorf("SSH connection not established")
+    }
 
 	startTime := time.Now()
 	result := &CommandResult{
 		Command: command,
 	}
 
-	// 创建会话
-	session, err := c.connection.NewSession()
-	if err != nil {
-		result.Error = fmt.Sprintf("failed to create session: %v", err)
-		result.ExitCode = -1
-		return result, err
-	}
+    // 创建会话（带重试）
+    session, err := c.newSessionWithRetry()
+    if err != nil {
+        result.Error = fmt.Sprintf("failed to create session: %v", err)
+        result.ExitCode = -1
+        return result, err
+    }
 	defer session.Close()
 
 	// 执行命令
@@ -234,22 +282,22 @@ func (c *Client) ExecuteCommands(ctx context.Context, commands []string) ([]*Com
 
 // ExecuteInteractiveCommand 执行交互式命令
 func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, responses []string) (*CommandResult, error) {
-	if c.connection == nil {
-		return nil, fmt.Errorf("SSH connection not established")
-	}
+    if c.connection == nil {
+        return nil, fmt.Errorf("SSH connection not established")
+    }
 
 	startTime := time.Now()
 	result := &CommandResult{
 		Command: command,
 	}
 
-	// 创建会话
-	session, err := c.connection.NewSession()
-	if err != nil {
-		result.Error = fmt.Sprintf("failed to create session: %v", err)
-		result.ExitCode = -1
-		return result, err
-	}
+    // 创建会话（带重试）
+    session, err := c.newSessionWithRetry()
+    if err != nil {
+        result.Error = fmt.Sprintf("failed to create session: %v", err)
+        result.ExitCode = -1
+        return result, err
+    }
 	defer session.Close()
 
 	// 设置终端模式（启用回显，兼容网络设备CLI），并使用终端类型回退
@@ -262,7 +310,7 @@ func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, 
 	{
 		var lastErr error
 		for _, term := range []string{"vt100", "xterm", "ansi", "dumb"} {
-			if err := session.RequestPty(term, 80, 24, modes); err == nil {
+			if ptyErr := session.RequestPty(term, 80, 24, modes); ptyErr == nil {
 				lastErr = nil
 				break
 			} else {
@@ -357,14 +405,15 @@ func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, 
 // ExecuteInteractiveCommands 在单一交互式会话(PTY Shell)中串行执行多条命令
 // 使用启发式的提示符后缀来分隔每条命令的输出 (例如: '>', '#', ']')
 func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []string, promptSuffixes []string, opts *InteractiveOptions) ([]*CommandResult, error) {
-	if c.connection == nil {
-		return nil, fmt.Errorf("SSH connection not established")
-	}
+    if c.connection == nil {
+        return nil, fmt.Errorf("SSH connection not established")
+    }
 
-	session, err := c.connection.NewSession()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create session: %w", err)
-	}
+    // 创建会话（带重试）
+    session, err := c.newSessionWithRetry()
+    if err != nil {
+        return nil, fmt.Errorf("failed to create session: %w", err)
+    }
 	// 确保会话在函数结束时被关闭
 	defer session.Close()
 
@@ -379,7 +428,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 	{
 		var lastErr error
 		for _, term := range []string{"vt100", "xterm", "ansi", "dumb"} {
-			if err := session.RequestPty(term, 80, 24, modes); err == nil {
+			if ptyErr := session.RequestPty(term, 80, 24, modes); ptyErr == nil {
 				lastErr = nil
 				break
 			} else {
@@ -416,6 +465,29 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 
 	// 发送 CRLF 促使设备输出当前提示符，便于后续检测（网络设备通常期望 CRLF）
 	_, _ = stdin.Write([]byte("\r\n"))
+
+	// 提示符诱发器：在初始阶段定期发送 CRLF，帮助设备输出提示符
+	// 某些设备在建立 PTY 后需要键入回车才能显示提示符
+	stopTrigger := make(chan struct{})
+	go func() {
+		defer func() { recover() }()
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		// 最多诱发 12 次（~12s），避免过度刷屏
+		count := 0
+		for {
+			select {
+			case <-stopTrigger:
+				return
+			case <-ticker.C:
+				if count >= 12 {
+					return
+				}
+				_, _ = stdin.Write([]byte("\r\n"))
+				count++
+			}
+		}
+	}()
 
 	// 读取输出的协程，将数据按行推送到通道
 	lineCh := make(chan string, 4096)
@@ -582,6 +654,8 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 		}
 	}
 Ready:
+	// 停止提示符诱发器
+	close(stopTrigger)
 	// 清空可能残留的提示符或横幅行，避免第一条命令立即被提示符结束导致输出错位
 	for {
 		select {
@@ -612,6 +686,8 @@ StartCommands:
 		// 跳过命令回显（部分设备会回显命令，且可能因换行/分页被拆分）
 		echoRemain := strings.TrimSpace(cmd)
 		cmdStart := time.Now()
+		// 自动交互仅命中一次（每条命令），触发后不再重复执行
+		autoInteractDone := false
 		for {
 			select {
 			case <-ctx.Done():
@@ -650,24 +726,24 @@ StartCommands:
 				if isPrompt(clean) && !sawContent {
 					continue
 				}
-                // 若是提示符行（命令结束标志），不要写入输出，直接结束该命令
-                if isPrompt(clean) {
-                    results = append(results, &CommandResult{
-                        Command:  cmd,
-                        Output:   out.String(),
-                        Error:    "",
-                        ExitCode: 0,
-                        Duration: time.Since(cmdStart),
-                    })
-                    goto NextCmd
-                }
+				// 若是提示符行（命令结束标志），不要写入输出，直接结束该命令
+				if isPrompt(clean) {
+					results = append(results, &CommandResult{
+						Command:  cmd,
+						Output:   out.String(),
+						Error:    "",
+						ExitCode: 0,
+						Duration: time.Since(cmdStart),
+					})
+					goto NextCmd
+				}
 
-                // 写入正常内容
-                out.WriteString(clean)
-                out.WriteString("\n")
-                if strings.TrimSpace(clean) != "" {
-                    sawContent = true
-                }
+				// 写入正常内容
+				out.WriteString(clean)
+				out.WriteString("\n")
+				if strings.TrimSpace(clean) != "" {
+					sawContent = true
+				}
 
 				// 在执行 enable 时，遇到密码提示则自动输入密码
 				// 兼容常见提示："Password:", "password:", "Enter password:"
@@ -684,20 +760,21 @@ StartCommands:
 					}
 				}
 
-				// 自动交互：匹配提示后自动发送响应（如 more/confirm）
-				if opts != nil && len(opts.AutoInteractions) > 0 {
+				// 自动交互：匹配提示后自动发送响应（如 more/confirm），仅命中一次
+				if opts != nil && len(opts.AutoInteractions) > 0 && !autoInteractDone {
 					for _, ai := range opts.AutoInteractions {
 						if ai.ExpectOutput == "" || ai.AutoSend == "" {
 							continue
 						}
 						if strings.Contains(lower, strings.ToLower(ai.ExpectOutput)) {
 							_, _ = stdin.Write([]byte(ai.AutoSend + "\r\n"))
-							// 继续读取输出直到提示符
+							// 命中后标记不再重复自动执行
+							autoInteractDone = true
 							break
 						}
 					}
 				}
-                // 提示符已在写入前处理
+				// 提示符已在写入前处理
 			case <-time.After(30 * time.Second):
 				// 超时保护：将当前已读作为输出返回
 				results = append(results, &CommandResult{
@@ -767,14 +844,10 @@ func (c *Client) IsConnected() bool {
 	if conn == nil {
 		return false
 	}
-	// 进行轻量级探测：尝试创建会话以确认连接仍有效
-	// 某些情况下远端断开但本地仍保留指针，NewSession 会返回 EOF
-	sess, err := conn.NewSession()
-	if err != nil {
-		return false
-	}
-	sess.Close()
-	return true
+	// 轻量级健康检查：发送 keepalive 请求而不创建会话，避免触发设备的会话数量限制
+	// 若底层连接已断开，SendRequest 会返回错误；否则认为连接仍可用
+	_, _, err := conn.SendRequest("keepalive@openssh.com", false, nil)
+	return err == nil
 }
 
 // keepAlive 保持连接活跃

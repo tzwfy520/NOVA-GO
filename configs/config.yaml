@@ -16,6 +16,33 @@ collector:
   tags: ["production", "ssh"]
   threads: 10
   concurrent: 5
+  # 原始输出过滤规则（按行移除）
+  output_filter:
+    # 前缀匹配：行以这些前缀开始则移除
+    prefixes:
+      - "---- More ----"
+      - "more"
+    # 包含匹配：行包含这些子串则移除
+    contains:
+      - "--more--"
+    # 可选：匹配前是否忽略大小写与去除首尾空格
+    case_insensitive: true
+    trim_space: true
+  # 交互配置：自动交互与错误提示
+  interact:
+    # 自动交互参数对：当输出包含 expect_output 时自动发送命令
+    auto_interactions:
+      - except_output: "do you want to save this config? yes/no"
+        command_auto_send: "yes"
+      - except_output: "do you want to reload this device? yes/no"
+        command_auto_send: "no"
+    # 命令错误提示：当设备输出以这些字符串开头时，标记命令错误
+    error_hints:
+      - "ERROR:"
+      - "invalid parameters detect"
+    # 匹配选项
+    case_insensitive: true
+    trim_space: true
   
 
 # 数据库配置
