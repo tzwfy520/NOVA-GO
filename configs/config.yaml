@@ -43,6 +43,59 @@ collector:
     # 匹配选项
     case_insensitive: true
     trim_space: true
+  # 设备平台默认参数：按平台注入 enable/分页关闭命令、提示符后缀与自动交互
+  device_defaults:
+    cisco_ios:
+      prompt_suffixes: [">", "#"]
+      disable_paging_cmds: ["terminal length 0"]
+      enable_required: true
+      skip_delayed_echo: true
+      error_hints:
+        - "invalid input detected"
+        - "incomplete command"
+        - "ambiguous command"
+        - "unknown command"
+        - "invalid autocommand"
+        - "line has invalid autocommand"
+      auto_interactions:
+        - except_output: "--more--"
+          command_auto_send: " "
+        - except_output: "more"
+          command_auto_send: " "
+        - except_output: "press any key"
+          command_auto_send: " "
+        - except_output: "confirm"
+          command_auto_send: "y"
+        - except_output: "[yes/no]"
+          command_auto_send: "yes"
+    huawei:
+      prompt_suffixes: [">", "#", "]"]
+      disable_paging_cmds: ["screen-length disable"]
+      enable_required: false
+      skip_delayed_echo: true
+      error_hints:
+        - "error:"
+        - "unrecognized command"
+      auto_interactions:
+        - except_output: "more"
+          command_auto_send: " "
+        - except_output: "press any key"
+          command_auto_send: " "
+        - except_output: "confirm"
+          command_auto_send: "y"
+    h3c:
+      prompt_suffixes: [">", "#", "]"]
+      disable_paging_cmds: ["screen-length disable"]
+      enable_required: false
+      skip_delayed_echo: true
+      error_hints:
+        - "error:"
+        - "unrecognized command"
+      auto_interactions:
+        - except_output: "more"
+          command_auto_send: " "
+        - except_output: "press any key"
+          command_auto_send: " "
   
 
 # 数据库配置

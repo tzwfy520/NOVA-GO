@@ -8,7 +8,6 @@ import (
     "time"
 
     "github.com/gin-gonic/gin"
-    "github.com/sshcollectorpro/sshcollectorpro/addone/collect"
     "github.com/sshcollectorpro/sshcollectorpro/internal/service"
     "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
     "golang.org/x/sync/errgroup"
@@ -224,12 +223,17 @@ func (h *CollectorHandler) BatchExecute(c *gin.Context) {
         logger.Info("Batch task completed", "index", i+1, "task_id", request.TaskID, "success", response.Success)
     }
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    "SUCCESS",
-		"message": "批量任务执行完成",
-		"data":    responses,
-		"total":   len(responses),
-	})
+    // 使用自定义编码器关闭 HTML 转义，避免 \u003c/\u003e 转义影响原始设备输出可读性
+    c.Header("Content-Type", "application/json")
+    c.Status(http.StatusOK)
+    enc := json.NewEncoder(c.Writer)
+    enc.SetEscapeHTML(false)
+    _ = enc.Encode(gin.H{
+        "code":    "SUCCESS",
+        "message": "批量任务执行完成",
+        "data":    responses,
+        "total":   len(responses),
+    })
 }
 
 // CustomerBatchRequest 自定义采集批量请求
@@ -508,14 +512,8 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
                 return nil
             }
 
-            // 预组装系统命令 + 可选扩展命令
-            cpl := strings.ToLower(strings.TrimSpace(d.DevicePlatform))
-            plugin := collect.Get(cpl)
-            sysCmds := plugin.SystemCommands()
-            cliCombined := make([]string, 0, len(sysCmds)+len(d.CliList))
-            if len(sysCmds) > 0 {
-                cliCombined = append(cliCombined, sysCmds...)
-            }
+            // 仅使用用户提供的命令列表（不再注入平台默认命令）
+            cliCombined := make([]string, 0, len(d.CliList))
             if len(d.CliList) > 0 {
                 cliCombined = append(cliCombined, d.CliList...)
             }
@@ -580,7 +578,12 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 
     _ = g.Wait()
 
-    c.JSON(http.StatusOK, gin.H{
+    // 使用自定义编码器关闭 HTML 转义，保持原始输出可读性（如 <, > 不被 \u003c/\u003e）
+    c.Header("Content-Type", "application/json")
+    c.Status(http.StatusOK)
+    enc := json.NewEncoder(c.Writer)
+    enc.SetEscapeHTML(false)
+    _ = enc.Encode(gin.H{
         "code":    "SUCCESS",
         "message": "系统预制批量任务执行完成",
         "data":    responses,

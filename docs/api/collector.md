@@ -7,7 +7,7 @@
 - `task_name`：任务名称，选填。
 - `device_ip`：设备 IP，必填。
 - `device_name`：设备名称，选填。
-- `device_platform`：设备平台，选填；系统预制批量接口中为必填。
+- `device_platform`：设备平台，选填；系统批量接口中为必填。
 - `collect_protocol`：采集协议，当前支持 `ssh`，选填；为空时默认按 SSH 处理。
 - `port`：SSH 端口，选填；未提供或非法时默认 `22`。
 - `user_name`：登录用户名，必填。
@@ -15,9 +15,9 @@
 - `enable_password`：特权/enable 密码，选填。
 - `cli_list`：命令列表，可为空/一个/多个命令。
   - 自定义批量接口：为空时不会执行任何命令，返回空结果。
-  - 系统预制批量接口：为空时将按平台的内置命令执行。
-- `retry_flag`：重试次数，选填；为空时读取交互插件默认设置。
-- `timeout`：超时时间（秒），选填；为空时读取交互插件默认设置。
+  - 系统批量接口：为空时不会执行任何命令，返回空结果。
+ - `retry_flag`：重试次数，选填；为空时使用系统内置交互默认值。
+ - `timeout`：超时时间（秒），选填；为空时使用系统内置交互默认值。
 
 ## 输出参数
 - `task_id`：任务标识。
@@ -38,13 +38,13 @@
 - 不再通过 `collect_origin` 标识采集模式。
 - 采集模式由接口路径隐式决定：
   - `/api/v1/collector/batch/custom` → 自定义采集模式（按 `cli_list` 执行）。
-  - `/api/v1/collector/batch/system` → 系统预制采集模式（按平台内置命令执行，可追加 `cli_list`）。
+  - `/api/v1/collector/batch/system` → 系统批量采集模式（仅执行设备条目中的 `cli_list`）。
 
 ## 错误设计
 - 参数校验错误（HTTP 400）：
   - `task_id`、`device_ip`、`user_name`、`password` 缺失或为空。
   - `collect_protocol` 非法（目前仅支持 `ssh`）。
-  - 系统预制批量接口中 `device_platform` 为空。
+- 系统批量接口中 `device_platform` 为空。
   - `timeout` 超过上限（建议 ≤ 300 秒）。
   - `retry_flag` 为负数。
 - 资源/插件错误（HTTP 404）：指定的 `device_platform` 未找到对应插件。
@@ -61,34 +61,23 @@
 - `h3c_sr`
 - `h3c_msr`
 
-## 系统内置支持格式化的命令（按设备类型）
-- `cisco_ios`
-  - `show run`
-  - `show version`
-  - `show interfaces`
-- `huawei_s`
-  - `display current-configuration`
-  - `display version`
-- `huawei_ce`
-  - `display current-configuration`
-  - `display version`
-- `h3c_s`
-  - `display current-configuration`
-  - `display version`
-- `h3c_sr`
-  - `display current-configuration`
-  - `display version`
-- `h3c_msr`
-  - `display current-configuration`
-  - `display version`
-
-> 注：上述命令清单来自各平台的采集插件 `SystemCommands()` 定义，可根据后续平台能力扩展。
+## 重要说明（系统批量采集）
+- `device_platform` 仍为必填，用于交互参数与提示符匹配。
+- 不再注入平台默认命令；仅执行用户在 `device_list[].cli_list` 中提供的命令。
 
 > 重要：原单设备接口已下线，请使用批量接口 `/api/v1/collector/batch/custom` 或 `/api/v1/collector/batch/system`。
 
 ## 说明
 - 当 `format_output` 为空对象或空数组时，表示该命令未匹配到格式化规则或无法解析。
-- `retry_flag` 与 `timeout` 为空时使用交互插件默认值；平台可自行覆盖默认值。
+- `retry_flag` 与 `timeout` 为空时使用系统内置交互默认值；不再依赖外部插件覆盖。
+
+## 问题诊断（Problems & Diagnostics）
+- System批量接口参数要求：`device_platform` 必填；若未提供 `cli_list`，将返回空结果。建议为每台设备提供至少一条命令。
+- 错误提示识别：可通过配置 `collector.interact.error_hints` 扩展错误前缀，默认大小写不敏感并自动去空格。示例：`invalid input`、`unrecognized command`。
+- Cisco特权失败：若结果包含 `privileged mode not entered (#)`，需在请求中提供 `enable_password` 或确保用户具备特权；系统会尝试执行 `enable` 并取消分页。
+- 提示符识别异常：检查设备平台与提示符后缀。平台默认后缀示例：Cisco `#`/`>`，Huawei/H3C `]`。如需自定义请在代码中调整 `getPlatformDefaults`。
+- 连接失败：检查 `device_ip` 与 `port`、认证参数、以及 `ssh.timeout` 设置；可直接使用系统命令进行手动SSH测试验证。
+- 输出过滤：默认移除分页提示（`collector.output_filter`），如需保留原始提示请调整配置。
 
 ---
 
@@ -171,13 +160,13 @@
 
 > 说明：批量任务下的每个设备执行会自动生成子任务ID（示例为 `T-2001-1`、`T-2001-2`），用于区分与追踪；返回结果按设备维度组织。
 
-### 系统预制采集批量接口
+### 系统批量采集接口
 - 路径：`POST /api/v1/collector/batch/system`
 - 输入参数：
   - 统一参数：`task_id`、`task_name`、`retry_flag`、`timeout`
-  - 设备参数数组 `device_list`：`device_ip`、`device_name`、`device_platform`（必填）、`collect_protocol`、`user_name`、`password`
-  - 可选扩展：`cli_list`（如提供，将在系统内置命令之后追加执行）
-- 输出参数：按设备组织输出，每个设备包含设备标识与该设备对应的系统预制采集执行结果。
+  - 设备参数数组 `device_list`：`device_ip`、`device_name`、`device_platform`（必填）、`collect_protocol`、`user_name`、`password`、`cli_list`
+  - `cli_list`：执行命令列表，未提供时不执行任何命令，返回空结果。
+- 输出参数：按设备组织输出，每个设备包含设备标识与该设备对应的系统批量采集执行结果。
 
 示例请求（system/batch）：
 ```json
@@ -193,7 +182,8 @@
       "device_platform": "huawei_s",
       "collect_protocol": "ssh",
       "user_name": "admin",
-      "password": "123456"
+      "password": "123456",
+      "cli_list": ["display version", "display current-configuration"]
     },
     {
       "device_ip": "10.0.1.20",
@@ -201,7 +191,8 @@
       "device_platform": "cisco_ios",
       "collect_protocol": "ssh",
       "user_name": "ops",
-      "password": "abcd"
+      "password": "abcd",
+      "cli_list": ["show version", "show running-config"]
     }
   ]
 }
@@ -211,7 +202,7 @@
 ```json
 {
   "code": "SUCCESS",
-  "message": "系统预制批量任务执行完成",
+  "message": "系统批量任务执行完成",
   "total": 2,
   "data": [
     {
@@ -242,7 +233,7 @@
 }
 ```
 
-> 说明：`collect_origin` 不再作为批量接口入参传递，由接口路径隐式决定（`/batch/custom` → `customer`，`/batch/system` → `system`）。系统预制接口要求 `device_platform` 必填，并按平台内置命令执行，可追加 `cli_list` 扩展。
+> 说明：`collect_origin` 不再作为批量接口入参传递，由接口路径隐式决定（`/batch/custom` → `customer`，`/batch/system` → `system`）。系统批量接口要求 `device_platform` 必填，且仅执行设备条目中的 `cli_list`；不再注入平台默认命令。
 
 ### 兼容性
 - 原单设备接口已移除；通用批量接口（`POST /api/v1/collector/batch`）保留，建议迁移到拆分后的批量接口以获得更清晰的语义。

@@ -236,21 +236,30 @@ func (c *Client) newSessionWithRetry() (*ssh.Session, error) {
 		lastErr = err
 		// 若错误不是通道被管理拒绝/打开失败，继续有限次重试以防瞬时状态
 		// 主要针对 "administratively prohibited"/"open failed" 文案做退避
-		msg := strings.ToLower(err.Error())
-		// 包含 EOF 也作为可重试错误（部分设备在登录后短时间内打开会话会返回 EOF）
-		if strings.Contains(msg, "eof") && c.info != nil {
-			// 尝试一次自动重连：关闭旧连接后根据保存的参数重建连接
-			// 使用 SSH 配置的 Timeout 作为重连的超时窗口
-			_ = c.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), c.config.Timeout)
-			// 忽略重连错误并继续后续退避，如果重连成功则下一次循环可能成功创建会话
-			_ = c.Connect(ctx, c.info)
-			cancel()
-			// 短暂等待以让设备端就绪
-			time.Sleep(200 * time.Millisecond)
-			// 继续进入下一次退避尝试
-			continue
-		}
+        msg := strings.ToLower(err.Error())
+        // 包含 EOF 也作为可重试错误（部分设备在登录后短时间内打开会话会返回 EOF）
+        if strings.Contains(msg, "eof") && c.info != nil {
+            // 尝试一次自动重连：关闭旧连接后根据保存的参数重建连接
+            // 使用 SSH 配置的 Timeout 作为重连的超时窗口
+            _ = c.Close()
+            ctx, cancel := context.WithTimeout(context.Background(), c.config.Timeout)
+            // 忽略重连错误并继续后续退避，如果重连成功则下一次循环可能成功创建会话
+            _ = c.Connect(ctx, c.info)
+            cancel()
+            // 短暂等待以让设备端就绪
+            time.Sleep(200 * time.Millisecond)
+            // 继续进入下一次退避尝试
+            continue
+        }
+        // 处理断开类错误：例如 "ssh: disconnect, reason 2: Out of context message type 97"
+        if (strings.Contains(msg, "disconnect") || strings.Contains(msg, "out of context") || strings.Contains(msg, "message type 97")) && c.info != nil {
+            _ = c.Close()
+            ctx, cancel := context.WithTimeout(context.Background(), c.config.Timeout)
+            _ = c.Connect(ctx, c.info)
+            cancel()
+            time.Sleep(200 * time.Millisecond)
+            continue
+        }
 		// 非典型错误也尝试后续退避，但不额外处理
 	}
 	return nil, lastErr
@@ -493,7 +502,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
                 lastErr = nil
                 break
             } else {
-                lastErr = err
+                lastErr = ptyErr
             }
         }
         if lastErr != nil {
@@ -768,8 +777,15 @@ StartCommands:
             case <-ctx.Done():
                 stdin.Close()
                 session.Close()
-                logger.Debug("SSH Interactive: ctx canceled; closing session")
-                return results, ctx.Err()
+                logger.Debug("SSH Interactive: ctx canceled; returning partial results")
+                results = append(results, &CommandResult{
+                    Command:  cmd,
+                    Output:   out.String(),
+                    Error:    ctx.Err().Error(),
+                    ExitCode: -1,
+                    Duration: time.Since(cmdStart),
+                })
+                return results, nil
 			case line := <-lineCh:
 				// 统一清洗行内容用于比较和提示符检测
 				clean := sanitize(line)

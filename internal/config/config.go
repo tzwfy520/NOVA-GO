@@ -30,16 +30,18 @@ type ServerConfig struct {
 
 // CollectorConfig 采集器配置
 type CollectorConfig struct {
-	ID         string   `mapstructure:"id"`
-	Type       string   `mapstructure:"type"`
-	Version    string   `mapstructure:"version"`
-	Tags       []string `mapstructure:"tags"`
-	Threads    int      `mapstructure:"threads"`
-	Concurrent int      `mapstructure:"concurrent"`
-	// OutputFilter 用于原始输出的行过滤（移除分页提示等）
-	OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
-	// Interact 交互配置：自动交互参数对与错误提示匹配
-	Interact InteractConfig `mapstructure:"interact"`
+    ID         string   `mapstructure:"id"`
+    Type       string   `mapstructure:"type"`
+    Version    string   `mapstructure:"version"`
+    Tags       []string `mapstructure:"tags"`
+    Threads    int      `mapstructure:"threads"`
+    Concurrent int      `mapstructure:"concurrent"`
+    // OutputFilter 用于原始输出的行过滤（移除分页提示等）
+    OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
+    // Interact 交互配置：自动交互参数对与错误提示匹配
+    Interact InteractConfig `mapstructure:"interact"`
+    // DeviceDefaults 按设备平台加载的交互/适配参数（提示符、分页、enable、自动交互）
+    DeviceDefaults map[string]PlatformDefaultsConfig `mapstructure:"device_defaults"`
 }
 
 // DatabaseConfig 数据库配置
@@ -150,13 +152,54 @@ func setDefaults() {
 	// 默认包含匹配：Cisco --more-- 提示
 	viper.SetDefault("collector.output_filter.contains", []string{"--more--"})
 
-	// 默认交互配置
-	viper.SetDefault("collector.interact.case_insensitive", true)
-	viper.SetDefault("collector.interact.trim_space", true)
-	// 默认自动交互为空（由各平台插件提供）
-	viper.SetDefault("collector.interact.auto_interactions", []map[string]string{})
-	// 默认错误提示前缀（可按需调整或清空）
-	viper.SetDefault("collector.interact.error_hints", []string{"ERROR:", "invalid parameters detect"})
+    // 默认交互配置
+    viper.SetDefault("collector.interact.case_insensitive", true)
+    viper.SetDefault("collector.interact.trim_space", true)
+    // 默认自动交互为空（由各平台插件提供）
+    viper.SetDefault("collector.interact.auto_interactions", []map[string]string{})
+    // 默认错误提示前缀（可按需调整或清空）
+    viper.SetDefault("collector.interact.error_hints", []string{"ERROR:", "invalid parameters detect"})
+
+    // 设备平台默认（可在配置文件中覆盖或新增平台）
+    viper.SetDefault("collector.device_defaults", map[string]map[string]interface{}{
+        "cisco_ios": {
+            "prompt_suffixes":      []string{">", "#"},
+            "disable_paging_cmds":  []string{"terminal length 0"},
+            "enable_required":       true,
+            "skip_delayed_echo":     true,
+            "error_hints":           []string{"invalid input detected", "incomplete command", "ambiguous command", "unknown command", "invalid autocommand", "line has invalid autocommand"},
+            "auto_interactions": []map[string]string{
+                {"except_output": "--more--", "command_auto_send": " ",},
+                {"except_output": "more", "command_auto_send": " ",},
+                {"except_output": "press any key", "command_auto_send": " ",},
+                {"except_output": "confirm", "command_auto_send": "y",},
+                {"except_output": "[yes/no]", "command_auto_send": "yes",},
+            },
+        },
+        "huawei": {
+            "prompt_suffixes":      []string{">", "#", "]"},
+            "disable_paging_cmds":  []string{"screen-length disable"},
+            "enable_required":       false,
+            "skip_delayed_echo":     true,
+            "error_hints":           []string{"error:", "unrecognized command"},
+            "auto_interactions": []map[string]string{
+                {"except_output": "more", "command_auto_send": " ",},
+                {"except_output": "press any key", "command_auto_send": " ",},
+                {"except_output": "confirm", "command_auto_send": "y",},
+            },
+        },
+        "h3c": {
+            "prompt_suffixes":      []string{">", "#", "]"},
+            "disable_paging_cmds":  []string{"screen-length disable"},
+            "enable_required":       false,
+            "skip_delayed_echo":     true,
+            "error_hints":           []string{"error:", "unrecognized command"},
+            "auto_interactions": []map[string]string{
+                {"except_output": "more", "command_auto_send": " ",},
+                {"except_output": "press any key", "command_auto_send": " ",},
+            },
+        },
+    })
 }
 
 // Get 获取全局配置
@@ -208,6 +251,16 @@ type InteractConfig struct {
 
 // AutoInteractionConfig 配置中的自动交互项
 type AutoInteractionConfig struct {
-	ExpectOutput string `mapstructure:"except_output"`
-	AutoSend     string `mapstructure:"command_auto_send"`
+    ExpectOutput string `mapstructure:"except_output"`
+    AutoSend     string `mapstructure:"command_auto_send"`
+}
+
+// PlatformDefaultsConfig 设备平台默认参数（可在配置文件中扩展）
+type PlatformDefaultsConfig struct {
+    PromptSuffixes     []string               `mapstructure:"prompt_suffixes"`
+    DisablePagingCmds  []string               `mapstructure:"disable_paging_cmds"`
+    AutoInteractions   []AutoInteractionConfig `mapstructure:"auto_interactions"`
+    ErrorHints         []string               `mapstructure:"error_hints"`
+    SkipDelayedEcho    bool                   `mapstructure:"skip_delayed_echo"`
+    EnableRequired     bool                   `mapstructure:"enable_required"`
 }
