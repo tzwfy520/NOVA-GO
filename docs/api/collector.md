@@ -5,20 +5,17 @@
 ## 输入参数
 - `task_id`：任务唯一标识，必填。
 - `task_name`：任务名称，选填。
-- `collect_origin`：采集来源，取值 `system` 或 `customer`，必填。
-  - `system`：系统内置任务，按设备平台执行系统内置的采集命令。
-  - `customer`：用户自定义任务，按传入的 `cli_list` 执行。
 - `device_ip`：设备 IP，必填。
 - `device_name`：设备名称，选填。
-- `device_platform`：设备平台，选填；当 `collect_origin=system` 时必须提供。
+- `device_platform`：设备平台，选填；系统预制批量接口中为必填。
 - `collect_protocol`：采集协议，当前支持 `ssh`，选填；为空时默认按 SSH 处理。
 - `port`：SSH 端口，选填；未提供或非法时默认 `22`。
 - `user_name`：登录用户名，必填。
 - `password`：登录密码，必填。
 - `enable_password`：特权/enable 密码，选填。
 - `cli_list`：命令列表，可为空/一个/多个命令。
-  - 当 `collect_origin=system` 时可为空，系统将按平台的内置命令执行。
-  - 当 `collect_origin=customer` 时可为空，此时不会执行任何命令，返回空结果。
+  - 自定义批量接口：为空时不会执行任何命令，返回空结果。
+  - 系统预制批量接口：为空时将按平台的内置命令执行。
 - `retry_flag`：重试次数，选填；为空时读取交互插件默认设置。
 - `timeout`：超时时间（秒），选填；为空时读取交互插件默认设置。
 
@@ -37,19 +34,17 @@
 
 说明：历史字段 `output` 已重命名为 `raw_output`，新增 `format_output` 字段用于承载格式化结果。
 
-## collect_origin 说明
-- `system`：
-  - 根据 `device_platform` 调度系统内置的采集命令（见下文的“系统内置格式化命令”）。
-  - 执行完成后输出 `raw_output`，并在可格式化时同时输出 `format_output`。
-- `customer`：
-  - 按 `cli_list` 执行用户指定命令；当命令满足对应平台的格式化条件时，返回 `format_output`。
-  - 当 `cli_list` 为空时，返回空的 `result`。
+## 采集模式说明
+- 不再通过 `collect_origin` 标识采集模式。
+- 采集模式由接口路径隐式决定：
+  - `/api/v1/collector/batch/custom` → 自定义采集模式（按 `cli_list` 执行）。
+  - `/api/v1/collector/batch/system` → 系统预制采集模式（按平台内置命令执行，可追加 `cli_list`）。
 
 ## 错误设计
 - 参数校验错误（HTTP 400）：
   - `task_id`、`device_ip`、`user_name`、`password` 缺失或为空。
   - `collect_protocol` 非法（目前仅支持 `ssh`）。
-  - `collect_origin=system` 且 `device_platform` 为空。
+  - 系统预制批量接口中 `device_platform` 为空。
   - `timeout` 超过上限（建议 ≤ 300 秒）。
   - `retry_flag` 为负数。
 - 资源/插件错误（HTTP 404）：指定的 `device_platform` 未找到对应插件。

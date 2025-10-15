@@ -9,3 +9,9 @@ password:Eccom@12345
 curl -sS -X POST 'http://localhost:18000/api/v1/collector/batch/custom' -H 'Content-Type: application/json' -d '{ "task_id": "T-h3c-sr-13919619696-001", "task_name": "H3C SR 单设备采集", "retry_flag": 2, "timeout": 60, "devices": [   {     "device_ip": "139.196.196.96",     "device_platform": "h3c_sr",     "collect_protocol": "ssh",     "port": 21202,     "user_name": "eccom123",     "password": "Eccom@12345",     "cli_list": [       "display current",       "display version",       "display ntp",       "display interface"     ]   } ] }'
 
 curl -sS -X POST 'http://localhost:18000/api/v1/collector/batch/custom' -H 'Content-Type: application/json' -d '{ "task_id": "T-h3c-sr-13919619696-001", "task_name": "H3C SR 单设备采集", "retry_flag": 2, "timeout": 60, "devices": [   {     "device_ip": "139.196.196.96",     "device_platform": "h3c_sr",     "collect_protocol": "ssh",     "port": 21202,     "user_name": "eccom123",     "password": "Eccom@12345",     "cli_list": [       "display current" ]   } ] }'
+
+
+
+go run cmd/cli/test_batch_custom.go -payload test/payload-cisco-enable.json -start_server true -keep_server false 
+
+go run cmd/cli/test_batch_custom.go -payload test/payload-cisco-enable-user.json -start_server true -keep_server false 

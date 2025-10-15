@@ -63,7 +63,7 @@ ssh:
 
 # 日志配置
 log:
-  level: "info"  # debug, info, warn, error
+  level: "debug"  # debug, info, warn, error
   format: "json"  # json, text
   output: "both"  # console, file, both
   file_path: "./logs/collector.log"

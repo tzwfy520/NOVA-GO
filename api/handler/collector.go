@@ -1,6 +1,7 @@
 package handler
 
 import (
+    "context"
     "encoding/json"
     "fmt"
     "net/http"
@@ -8,6 +9,7 @@ import (
     "time"
 
     "github.com/gin-gonic/gin"
+    "github.com/sshcollectorpro/sshcollectorpro/addone/collect"
     "github.com/sshcollectorpro/sshcollectorpro/internal/service"
     "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 )
@@ -307,13 +309,13 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
     }
 
     responses := make([]map[string]interface{}, 0, len(req.Devices))
-    ctx := c.Request.Context()
+    ctx := context.Background()
     for i, d := range req.Devices {
         // 组装单设备请求（customer）
         r := service.CollectRequest{
             TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
             TaskName:        req.TaskName,
-            CollectOrigin:   "customer",
+            CollectOrigin:   "", // 已弃用，由路由决定采集模式
             DeviceIP:        d.DeviceIP,
             Port:            d.Port,
             DeviceName:      d.DeviceName,
@@ -325,7 +327,7 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
             CliList:         req.CliList,
             RetryFlag:       req.RetryFlag,
             Timeout:         req.Timeout,
-            Metadata:        map[string]interface{}{"batch_task_id": req.TaskID},
+            Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "customer"},
         }
 
         if err := h.validateCollectRequest(&r); err != nil {
@@ -430,13 +432,38 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
     }
 
     responses := make([]map[string]interface{}, 0, len(req.DeviceList))
-    ctx := c.Request.Context()
+    ctx := context.Background()
     for i, d := range req.DeviceList {
+        // 校验平台必填
+        if strings.TrimSpace(d.DevicePlatform) == "" {
+            responses = append(responses, map[string]interface{}{
+                "device_ip":       d.DeviceIP,
+                "device_name":     d.DeviceName,
+                "device_platform": d.DevicePlatform,
+                "success":         false,
+                "error":           "system模式需要指定设备平台(device_platform)",
+                "task_id":         fmt.Sprintf("%s-%d", req.TaskID, i+1),
+                "timestamp":       time.Now(),
+            })
+            continue
+        }
+        // 预组装系统命令 + 可选扩展命令
+        cpl := strings.ToLower(strings.TrimSpace(d.DevicePlatform))
+        plugin := collect.Get(cpl)
+        sysCmds := plugin.SystemCommands()
+        cliCombined := make([]string, 0, len(sysCmds)+len(d.CliList))
+        if len(sysCmds) > 0 {
+            cliCombined = append(cliCombined, sysCmds...)
+        }
+        if len(d.CliList) > 0 {
+            cliCombined = append(cliCombined, d.CliList...)
+        }
+
         // 组装单设备请求（system）
         r := service.CollectRequest{
             TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
             TaskName:        req.TaskName,
-            CollectOrigin:   "system",
+            CollectOrigin:   "", // 已弃用，由路由决定采集模式
             DeviceIP:        d.DeviceIP,
             Port:            d.Port,
             DeviceName:      d.DeviceName,
@@ -445,10 +472,10 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
             UserName:        d.UserName,
             Password:        d.Password,
             EnablePassword:  d.EnablePassword,
-            CliList:         d.CliList, // 允许系统命令后追加
+            CliList:         cliCombined, // 预组装系统命令 + 扩展命令
             RetryFlag:       req.RetryFlag,
             Timeout:         req.Timeout,
-            Metadata:        map[string]interface{}{"batch_task_id": req.TaskID},
+            Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "system"},
         }
 
         if err := h.validateCollectRequest(&r); err != nil {
@@ -515,13 +542,7 @@ func (h *CollectorHandler) validateCollectRequest(request *service.CollectReques
     if p := strings.TrimSpace(strings.ToLower(request.CollectProtocol)); p != "" && p != "ssh" {
         return fmt.Errorf("不支持的采集协议: %s", request.CollectProtocol)
     }
-    // system 模式需要平台
-    origin := strings.TrimSpace(strings.ToLower(request.CollectOrigin))
-    if origin == "system" {
-        if strings.TrimSpace(request.DevicePlatform) == "" {
-            return fmt.Errorf("system模式需要指定设备平台(device_platform)")
-        }
-    }
+    // 不再基于 origin 进行校验；平台校验在具体路由中处理
     // 端口（可选）范围校验
     if request.Port != 0 && (request.Port < 1 || request.Port > 65535) {
         return fmt.Errorf("端口号必须在1-65535之间")
