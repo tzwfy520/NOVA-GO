@@ -1,7 +1,6 @@
 package handler
 
 import (
-    "context"
     "encoding/json"
     "fmt"
     "net/http"
@@ -12,6 +11,7 @@ import (
     "github.com/sshcollectorpro/sshcollectorpro/addone/collect"
     "github.com/sshcollectorpro/sshcollectorpro/internal/service"
     "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+    "golang.org/x/sync/errgroup"
 )
 
 // CollectorHandler 采集器处理器
@@ -308,65 +308,98 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
         return
     }
 
-    responses := make([]map[string]interface{}, 0, len(req.Devices))
-    ctx := context.Background()
-    for i, d := range req.Devices {
-        // 组装单设备请求（customer）
-        r := service.CollectRequest{
-            TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
-            TaskName:        req.TaskName,
-            CollectOrigin:   "", // 已弃用，由路由决定采集模式
-            DeviceIP:        d.DeviceIP,
-            Port:            d.Port,
-            DeviceName:      d.DeviceName,
-            DevicePlatform:  d.DevicePlatform,
-            CollectProtocol: d.CollectProtocol,
-            UserName:        d.UserName,
-            Password:        d.Password,
-            EnablePassword:  d.EnablePassword,
-            CliList:         req.CliList,
-            RetryFlag:       req.RetryFlag,
-            Timeout:         req.Timeout,
-            Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "customer"},
-        }
+    // 基于服务的最大 worker 数控制批内并发度
+    stats := h.collectorService.GetStats()
+    maxWorkers := 4
+    if v, ok := stats["max_workers"].(int); ok && v > 0 {
+        maxWorkers = v
+    }
+    // 批次并发度不超过设备数量
+    k := maxWorkers
+    if k > len(req.Devices) {
+        k = len(req.Devices)
+    }
+    if k <= 0 {
+        k = 1
+    }
 
-        if err := h.validateCollectRequest(&r); err != nil {
-            responses = append(responses, map[string]interface{}{
+    responses := make([]map[string]interface{}, len(req.Devices))
+    reqCtx := c.Request.Context()
+    sem := make(chan struct{}, k)
+    g, ctx := errgroup.WithContext(reqCtx)
+
+    for i, d := range req.Devices {
+        i, d := i, d // capture loop vars
+        g.Go(func() error {
+            // 并发控制
+            select {
+            case sem <- struct{}{}:
+                defer func() { <-sem }()
+            case <-ctx.Done():
+                // 请求已取消
+                return nil
+            }
+
+            // 组装单设备请求（customer）
+            r := service.CollectRequest{
+                TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
+                TaskName:        req.TaskName,
+                CollectOrigin:   "", // 已弃用，由路由决定采集模式
+                DeviceIP:        d.DeviceIP,
+                Port:            d.Port,
+                DeviceName:      d.DeviceName,
+                DevicePlatform:  d.DevicePlatform,
+                CollectProtocol: d.CollectProtocol,
+                UserName:        d.UserName,
+                Password:        d.Password,
+                EnablePassword:  d.EnablePassword,
+                CliList:         req.CliList,
+                RetryFlag:       req.RetryFlag,
+                Timeout:         req.Timeout,
+                Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "customer"},
+            }
+
+            if err := h.validateCollectRequest(&r); err != nil {
+                responses[i] = map[string]interface{}{
+                    "device_ip":       d.DeviceIP,
+                    "port":            d.Port,
+                    "device_name":     d.DeviceName,
+                    "device_platform": d.DevicePlatform,
+                    "success":         false,
+                    "error":           "参数验证失败: " + err.Error(),
+                    "task_id":         r.TaskID,
+                    "timestamp":       time.Now(),
+                }
+                return nil
+            }
+
+            resp, err := h.collectorService.ExecuteTask(ctx, &r)
+            if err != nil {
+                resp = &service.CollectResponse{
+                    TaskID:    r.TaskID,
+                    Success:   false,
+                    Error:     err.Error(),
+                    Timestamp: time.Now(),
+                }
+            }
+
+            responses[i] = map[string]interface{}{
                 "device_ip":       d.DeviceIP,
                 "port":            d.Port,
                 "device_name":     d.DeviceName,
                 "device_platform": d.DevicePlatform,
-                "success":         false,
-                "error":           "参数验证失败: " + err.Error(),
-                "task_id":         r.TaskID,
-                "timestamp":       time.Now(),
-            })
-            continue
-        }
-
-        resp, err := h.collectorService.ExecuteTask(ctx, &r)
-        if err != nil {
-            resp = &service.CollectResponse{
-                TaskID:    r.TaskID,
-                Success:   false,
-                Error:     err.Error(),
-                Timestamp: time.Now(),
+                "task_id":         resp.TaskID,
+                "success":         resp.Success,
+                "results":         resp.Results,
+                "error":           resp.Error,
+                "duration_ms":     resp.DurationMS,
+                "timestamp":       resp.Timestamp,
             }
-        }
-
-        responses = append(responses, map[string]interface{}{
-            "device_ip":       d.DeviceIP,
-            "port":            d.Port,
-            "device_name":     d.DeviceName,
-            "device_platform": d.DevicePlatform,
-            "task_id":         resp.TaskID,
-            "success":         resp.Success,
-            "results":         resp.Results,
-            "error":           resp.Error,
-            "duration_ms":     resp.DurationMS,
-            "timestamp":       resp.Timestamp,
+            return nil
         })
     }
+
+    _ = g.Wait()
 
     // 汇总成功/失败以确定顶层返回码
     successCount := 0
@@ -431,89 +464,121 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
         return
     }
 
-    responses := make([]map[string]interface{}, 0, len(req.DeviceList))
-    ctx := context.Background()
+    // 基于服务的最大 worker 数控制批内并发度
+    stats := h.collectorService.GetStats()
+    maxWorkers := 4
+    if v, ok := stats["max_workers"].(int); ok && v > 0 {
+        maxWorkers = v
+    }
+    k := maxWorkers
+    if k > len(req.DeviceList) {
+        k = len(req.DeviceList)
+    }
+    if k <= 0 {
+        k = 1
+    }
+
+    responses := make([]map[string]interface{}, len(req.DeviceList))
+    reqCtx := c.Request.Context()
+    sem := make(chan struct{}, k)
+    g, ctx := errgroup.WithContext(reqCtx)
+
     for i, d := range req.DeviceList {
-        // 校验平台必填
-        if strings.TrimSpace(d.DevicePlatform) == "" {
-            responses = append(responses, map[string]interface{}{
-                "device_ip":       d.DeviceIP,
-                "device_name":     d.DeviceName,
-                "device_platform": d.DevicePlatform,
-                "success":         false,
-                "error":           "system模式需要指定设备平台(device_platform)",
-                "task_id":         fmt.Sprintf("%s-%d", req.TaskID, i+1),
-                "timestamp":       time.Now(),
-            })
-            continue
-        }
-        // 预组装系统命令 + 可选扩展命令
-        cpl := strings.ToLower(strings.TrimSpace(d.DevicePlatform))
-        plugin := collect.Get(cpl)
-        sysCmds := plugin.SystemCommands()
-        cliCombined := make([]string, 0, len(sysCmds)+len(d.CliList))
-        if len(sysCmds) > 0 {
-            cliCombined = append(cliCombined, sysCmds...)
-        }
-        if len(d.CliList) > 0 {
-            cliCombined = append(cliCombined, d.CliList...)
-        }
-
-        // 组装单设备请求（system）
-        r := service.CollectRequest{
-            TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
-            TaskName:        req.TaskName,
-            CollectOrigin:   "", // 已弃用，由路由决定采集模式
-            DeviceIP:        d.DeviceIP,
-            Port:            d.Port,
-            DeviceName:      d.DeviceName,
-            DevicePlatform:  d.DevicePlatform,
-            CollectProtocol: d.CollectProtocol,
-            UserName:        d.UserName,
-            Password:        d.Password,
-            EnablePassword:  d.EnablePassword,
-            CliList:         cliCombined, // 预组装系统命令 + 扩展命令
-            RetryFlag:       req.RetryFlag,
-            Timeout:         req.Timeout,
-            Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "system"},
-        }
-
-        if err := h.validateCollectRequest(&r); err != nil {
-            responses = append(responses, map[string]interface{}{
-                "device_ip":       d.DeviceIP,
-                "device_name":     d.DeviceName,
-                "device_platform": d.DevicePlatform,
-                "success":         false,
-                "error":           "参数验证失败: " + err.Error(),
-                "task_id":         r.TaskID,
-                "timestamp":       time.Now(),
-            })
-            continue
-        }
-
-        resp, err := h.collectorService.ExecuteTask(ctx, &r)
-        if err != nil {
-            resp = &service.CollectResponse{
-                TaskID:    r.TaskID,
-                Success:   false,
-                Error:     err.Error(),
-                Timestamp: time.Now(),
+        i, d := i, d // capture loop vars
+        g.Go(func() error {
+            // 并发控制
+            select {
+            case sem <- struct{}{}:
+                defer func() { <-sem }()
+            case <-ctx.Done():
+                return nil
             }
-        }
 
-        responses = append(responses, map[string]interface{}{
-            "device_ip":       d.DeviceIP,
-            "port":            d.Port,
-            "device_name":     d.DeviceName,
-            "device_platform": d.DevicePlatform,
-            "task_id":         resp.TaskID,
-            "success":         resp.Success,
-            "results":         resp.Results,
-            "error":           resp.Error,
-            "duration_ms":     resp.DurationMS,
-            "timestamp":       resp.Timestamp,
+            // 校验平台必填
+            if strings.TrimSpace(d.DevicePlatform) == "" {
+                responses[i] = map[string]interface{}{
+                    "device_ip":       d.DeviceIP,
+                    "device_name":     d.DeviceName,
+                    "device_platform": d.DevicePlatform,
+                    "success":         false,
+                    "error":           "system模式需要指定设备平台(device_platform)",
+                    "task_id":         fmt.Sprintf("%s-%d", req.TaskID, i+1),
+                    "timestamp":       time.Now(),
+                }
+                return nil
+            }
+
+            // 预组装系统命令 + 可选扩展命令
+            cpl := strings.ToLower(strings.TrimSpace(d.DevicePlatform))
+            plugin := collect.Get(cpl)
+            sysCmds := plugin.SystemCommands()
+            cliCombined := make([]string, 0, len(sysCmds)+len(d.CliList))
+            if len(sysCmds) > 0 {
+                cliCombined = append(cliCombined, sysCmds...)
+            }
+            if len(d.CliList) > 0 {
+                cliCombined = append(cliCombined, d.CliList...)
+            }
+
+            // 组装单设备请求（system）
+            r := service.CollectRequest{
+                TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
+                TaskName:        req.TaskName,
+                CollectOrigin:   "", // 已弃用，由路由决定采集模式
+                DeviceIP:        d.DeviceIP,
+                Port:            d.Port,
+                DeviceName:      d.DeviceName,
+                DevicePlatform:  d.DevicePlatform,
+                CollectProtocol: d.CollectProtocol,
+                UserName:        d.UserName,
+                Password:        d.Password,
+                EnablePassword:  d.EnablePassword,
+                CliList:         cliCombined, // 预组装系统命令 + 扩展命令
+                RetryFlag:       req.RetryFlag,
+                Timeout:         req.Timeout,
+                Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "system"},
+            }
+
+            if err := h.validateCollectRequest(&r); err != nil {
+                responses[i] = map[string]interface{}{
+                    "device_ip":       d.DeviceIP,
+                    "device_name":     d.DeviceName,
+                    "device_platform": d.DevicePlatform,
+                    "success":         false,
+                    "error":           "参数验证失败: " + err.Error(),
+                    "task_id":         r.TaskID,
+                    "timestamp":       time.Now(),
+                }
+                return nil
+            }
+
+            resp, err := h.collectorService.ExecuteTask(ctx, &r)
+            if err != nil {
+                resp = &service.CollectResponse{
+                    TaskID:    r.TaskID,
+                    Success:   false,
+                    Error:     err.Error(),
+                    Timestamp: time.Now(),
+                }
+            }
+
+            responses[i] = map[string]interface{}{
+                "device_ip":       d.DeviceIP,
+                "port":            d.Port,
+                "device_name":     d.DeviceName,
+                "device_platform": d.DevicePlatform,
+                "task_id":         resp.TaskID,
+                "success":         resp.Success,
+                "results":         resp.Results,
+                "error":           resp.Error,
+                "duration_ms":     resp.DurationMS,
+                "timestamp":       resp.Timestamp,
+            }
+            return nil
         })
     }
+
+    _ = g.Wait()
 
     c.JSON(http.StatusOK, gin.H{
         "code":    "SUCCESS",
