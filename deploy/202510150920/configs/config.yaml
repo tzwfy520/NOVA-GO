@@ -1,0 +1,89 @@
+# SSH Collector Pro 默认配置
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 18000
+  mode: "release"  # debug, release, test
+  read_timeout: 60s
+  write_timeout: 60s
+
+# 采集器配置
+collector:
+  id: "collector-001"
+  type: "ssh"
+  version: "1.0.0"
+  tags: ["production", "ssh"]
+  threads: 10
+  concurrent: 5
+  # 原始输出过滤规则（按行移除）
+  output_filter:
+    # 前缀匹配：行以这些前缀开始则移除
+    prefixes:
+      - "---- More ----"
+      - "more"
+    # 包含匹配：行包含这些子串则移除
+    contains:
+      - "--more--"
+    # 可选：匹配前是否忽略大小写与去除首尾空格
+    case_insensitive: true
+    trim_space: true
+  # 交互配置：自动交互与错误提示
+  interact:
+    # 自动交互参数对：当输出包含 expect_output 时自动发送命令
+    auto_interactions:
+      - except_output: "do you want to save this config? yes/no"
+        command_auto_send: "yes"
+      - except_output: "do you want to reload this device? yes/no"
+        command_auto_send: "no"
+    # 命令错误提示：当设备输出以这些字符串开头时，标记命令错误
+    error_hints:
+      - "ERROR:"
+      - "invalid parameters detect"
+    # 匹配选项
+    case_insensitive: true
+    trim_space: true
+  
+
+# 数据库配置
+database:
+  sqlite:
+    path: "./data/collector.db"
+    max_idle_conns: 10
+    max_open_conns: 100
+    conn_max_lifetime: 3600s
+
+
+# SSH配置
+ssh:
+  timeout: 30s
+  keep_alive_interval: 10s
+  max_sessions: 100
+  
+
+# 日志配置
+log:
+  level: "info"  # debug, info, warn, error
+  format: "json"  # json, text
+  output: "both"  # console, file, both
+  file_path: "./logs/collector.log"
+  max_size: 100  # MB
+  max_backups: 5
+  max_age: 30  # days
+  compress: true
+
+# 采集数据存储（运行时可覆盖默认值）
+storage:
+  minio:
+    host: "127.0.0.1"
+    port: 9000
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "sshcollector-raw"
+    secure: false
+  postgres:
+    host: "127.0.0.1"
+    port: 5432
+    username: "postgres"
+    password: "postgres"
+    database: "sshcollector"

@@ -16,8 +16,11 @@ NC='\033[0m' # No Color
 PROJECT_NAME="sshcollector"
 VERSION=${VERSION:-"1.0.0"}
 BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+BUILD_ID=$(date '+%Y%m%d%H%M')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GO_VERSION=$(go version | awk '{print $3}')
+OUTPUT_ROOT="deploy"
+OUTPUT_DIR="${OUTPUT_ROOT}/${BUILD_ID}"
 
 # 构建信息
 LDFLAGS="-X 'main.Version=${VERSION}' -X 'main.BuildTime=${BUILD_TIME}' -X 'main.GitCommit=${GIT_COMMIT}' -X 'main.GoVersion=${GO_VERSION}'"
@@ -39,13 +42,10 @@ if ! command -v go &> /dev/null; then
     exit 1
 fi
 
-# 清理旧的构建文件
-echo -e "${YELLOW}清理旧的构建文件...${NC}"
-rm -f ${PROJECT_NAME}
-rm -rf dist/
-
-# 创建输出目录
-mkdir -p dist
+# 准备输出目录（按打包时间归档）
+echo -e "${YELLOW}准备输出目录...${NC}"
+mkdir -p "${OUTPUT_DIR}"
+echo -e "${GREEN}输出路径:${NC} ${OUTPUT_DIR}"
 
 # 下载依赖
 echo -e "${YELLOW}下载依赖...${NC}"
@@ -64,42 +64,47 @@ else
     echo -e "${YELLOW}警告: 未找到golangci-lint，跳过代码检查${NC}"
 fi
 
-# 构建Linux版本
-echo -e "${YELLOW}构建Linux版本...${NC}"
-CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
+###############################################
+# 构建三种平台可执行文件: linux / macOS / windows
+###############################################
+
+# 构建Linux版本 (amd64)
+echo -e "${YELLOW}构建Linux版本 (amd64)...${NC}"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags "${LDFLAGS}" \
-    -o dist/${PROJECT_NAME}-linux-amd64 \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-linux-amd64" \
     ./cmd/server
 
-# 构建macOS版本
-echo -e "${YELLOW}构建macOS版本...${NC}"
+# 构建macOS版本 (amd64)
+echo -e "${YELLOW}构建macOS版本 (amd64)...${NC}"
 CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build \
     -ldflags "${LDFLAGS}" \
-    -o dist/${PROJECT_NAME}-darwin-amd64 \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-darwin-amd64" \
     ./cmd/server
 
-# 构建Windows版本
-echo -e "${YELLOW}构建Windows版本...${NC}"
-CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build \
+# 构建macOS版本 (arm64 / Apple Silicon)
+echo -e "${YELLOW}构建macOS版本 (arm64 / Apple Silicon)...${NC}"
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
     -ldflags "${LDFLAGS}" \
-    -o dist/${PROJECT_NAME}-windows-amd64.exe \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-darwin-arm64" \
     ./cmd/server
 
-# 构建ARM64版本
-echo -e "${YELLOW}构建ARM64版本...${NC}"
-CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build \
+# 构建Windows版本 (amd64)
+echo -e "${YELLOW}构建Windows版本 (amd64)...${NC}"
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
     -ldflags "${LDFLAGS}" \
-    -o dist/${PROJECT_NAME}-linux-arm64 \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-windows-amd64.exe" \
     ./cmd/server
 
 # 复制配置文件
 echo -e "${YELLOW}复制配置文件...${NC}"
-cp -r configs dist/
-cp README.md dist/
+mkdir -p "${OUTPUT_DIR}/configs"
+cp -r configs/* "${OUTPUT_DIR}/configs" || true
+cp README.md "${OUTPUT_DIR}/" || true
 
 # 创建压缩包
 echo -e "${YELLOW}创建压缩包...${NC}"
-cd dist
+cd "${OUTPUT_DIR}"
 for binary in ${PROJECT_NAME}-*; do
     if [[ -f "$binary" ]]; then
         if [[ "$binary" == *".exe" ]]; then
@@ -118,8 +123,8 @@ echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}  构建完成${NC}"
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}构建文件位置: dist/${NC}"
-ls -la dist/
+echo -e "${GREEN}构建文件位置: ${OUTPUT_DIR}/${NC}"
+ls -la "${OUTPUT_DIR}"
 
 echo ""
 echo -e "${GREEN}构建成功! 🎉${NC}"

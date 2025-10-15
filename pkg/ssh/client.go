@@ -667,8 +667,10 @@ Ready:
 	}
 
 StartCommands:
-	results := make([]*CommandResult, 0, len(commands))
-	for _, cmd := range commands {
+    results := make([]*CommandResult, 0, len(commands))
+    // 记录上一条已发送命令，用于跳过其延迟回显（常见于网络设备在提示符后一并回显上一条命令）
+    prevCmd := ""
+    for _, cmd := range commands {
 		// 写入命令；若写入失败，认为会话已不可用，返回错误以触发上层回退
 		if _, err := stdin.Write([]byte(cmd + "\r\n")); err != nil {
 			// 关闭输入并等待读取协程结束，避免资源泄露
@@ -694,21 +696,34 @@ StartCommands:
 				stdin.Close()
 				session.Close()
 				return results, ctx.Err()
-			case line := <-lineCh:
-				// 统一清洗行内容用于比较和提示符检测
-				clean := sanitize(line)
-				// 处理命令回显：剥离提示符前缀，支持被拆分到多行的回显
-				if echoRemain != "" && clean != "" {
-					candidate := stripPromptPrefix(clean)
-					cmdTrim := strings.TrimSpace(cmd)
-					// 1) 常见：candidate 是 echoRemain 的前缀 → 吞掉并继续
-					if candidate != "" && strings.HasPrefix(strings.TrimSpace(echoRemain), candidate) {
-						// 规范化前缀移除（按可见文本移除）
-						er := strings.TrimSpace(echoRemain)
-						er = strings.TrimPrefix(er, candidate)
-						echoRemain = er
-						continue
-					}
+            case line := <-lineCh:
+                // 统一清洗行内容用于比较和提示符检测
+                clean := sanitize(line)
+                // 若出现“提示符+上一条命令”的延迟回显，直接跳过，避免写入当前命令的输出
+                // 例如："hostname#terminal length 0" 在下一条命令开始时到达
+                if clean != "" && prevCmd != "" {
+                    candidate := stripPromptPrefix(clean)
+                    pc := strings.TrimSpace(strings.ToLower(prevCmd))
+                    cc := strings.TrimSpace(strings.ToLower(candidate))
+                    if cc != "" {
+                        if cc == pc || strings.HasPrefix(pc, cc) || strings.HasPrefix(cc, pc) {
+                            // 这是上一条命令的回显或其碎片，跳过
+                            continue
+                        }
+                    }
+                }
+                // 处理命令回显：剥离提示符前缀，支持被拆分到多行的回显
+                if echoRemain != "" && clean != "" {
+                    candidate := stripPromptPrefix(clean)
+                    cmdTrim := strings.TrimSpace(cmd)
+                    // 1) 常见：candidate 是 echoRemain 的前缀 → 吞掉并继续
+                    if candidate != "" && strings.HasPrefix(strings.TrimSpace(echoRemain), candidate) {
+                        // 规范化前缀移除（按可见文本移除）
+                        er := strings.TrimSpace(echoRemain)
+                        er = strings.TrimPrefix(er, candidate)
+                        echoRemain = er
+                        continue
+                    }
 					// 2) 候选包含完整命令（提示符+命令同行）→ 吞掉并结束回显
 					if candidate != "" && strings.Contains(strings.ToLower(candidate), strings.ToLower(cmdTrim)) {
 						echoRemain = ""
@@ -727,16 +742,16 @@ StartCommands:
 					continue
 				}
 				// 若是提示符行（命令结束标志），不要写入输出，直接结束该命令
-				if isPrompt(clean) {
-					results = append(results, &CommandResult{
-						Command:  cmd,
-						Output:   out.String(),
-						Error:    "",
-						ExitCode: 0,
-						Duration: time.Since(cmdStart),
-					})
-					goto NextCmd
-				}
+                if isPrompt(clean) {
+                    results = append(results, &CommandResult{
+                        Command:  cmd,
+                        Output:   out.String(),
+                        Error:    "",
+                        ExitCode: 0,
+                        Duration: time.Since(cmdStart),
+                    })
+                    goto NextCmd
+                }
 
 				// 写入正常内容
 				out.WriteString(clean)
@@ -750,14 +765,14 @@ StartCommands:
 				trimmed := clean
 				lower := strings.ToLower(trimmed)
 				if opts != nil && opts.EnablePassword != "" {
-					if strings.EqualFold(strings.TrimSpace(cmd), "enable") {
-						if strings.Contains(lower, "password") {
-							// 写入 enable 密码并换行
-							_, _ = stdin.Write([]byte(opts.EnablePassword + "\n"))
-							// 不立即结束，继续等待提示符，以确保进入特权模式
-							continue
-						}
-					}
+                    if strings.EqualFold(strings.TrimSpace(cmd), "enable") {
+                        if strings.Contains(lower, "password") {
+                            // 写入 enable 密码并换行（使用 CRLF 提升网络设备兼容性）
+                            _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+                            // 不立即结束，继续等待提示符，以确保进入特权模式
+                            continue
+                        }
+                    }
 				}
 
 				// 自动交互：匹配提示后自动发送响应（如 more/confirm），仅命中一次
@@ -786,14 +801,16 @@ StartCommands:
 				})
 				goto NextCmd
 			}
-		}
-	NextCmd:
-		// 命令间隔控制（避免过快触发设备限流或分页）
-		if opts != nil && opts.CommandIntervalMS > 0 {
-			time.Sleep(time.Duration(opts.CommandIntervalMS) * time.Millisecond)
-		}
-		// 继续处理下一条命令
-	}
+        }
+    NextCmd:
+        // 记录上一条命令，供下一条命令跳过其延迟回显
+        prevCmd = cmd
+        // 命令间隔控制（避免过快触发设备限流或分页）
+        if opts != nil && opts.CommandIntervalMS > 0 {
+            time.Sleep(time.Duration(opts.CommandIntervalMS) * time.Millisecond)
+        }
+        // 继续处理下一条命令
+    }
 
 	// 优雅关闭交互通道：按配置的退出命令序列依次尝试
 	exitSeq := []string{"exit", "quit"}
