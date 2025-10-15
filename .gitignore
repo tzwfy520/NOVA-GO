@@ -65,3 +65,6 @@ configs/secret.yaml
 # Test coverage
 coverage.out
 coverage.html
+
+# Deploy
+deploy/

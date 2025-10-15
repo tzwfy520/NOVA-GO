@@ -16,13 +16,6 @@ import (
     "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 
     // 确保即使仅运行 main.go 也会触发各平台插件的注册
-    // 交互插件（启用 Cisco enable、关闭分页等）
-    _ "github.com/sshcollectorpro/sshcollectorpro/addone/interact/platforms/cisco_ios"
-    _ "github.com/sshcollectorpro/sshcollectorpro/addone/interact/platforms/huawei_s"
-    _ "github.com/sshcollectorpro/sshcollectorpro/addone/interact/platforms/huawei_ce"
-    _ "github.com/sshcollectorpro/sshcollectorpro/addone/interact/platforms/h3c_s"
-    _ "github.com/sshcollectorpro/sshcollectorpro/addone/interact/platforms/h3c_sr"
-    _ "github.com/sshcollectorpro/sshcollectorpro/addone/interact/platforms/h3c_msr"
     // 采集插件（系统任务命令与解析）
     _ "github.com/sshcollectorpro/sshcollectorpro/addone/collect/platforms/cisco_ios"
     _ "github.com/sshcollectorpro/sshcollectorpro/addone/collect/platforms/huawei_s"

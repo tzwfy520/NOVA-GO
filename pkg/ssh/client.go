@@ -39,21 +39,25 @@ type ConnectionInfo struct {
 
 // CommandResult 命令执行结果
 type CommandResult struct {
-	Command  string        `json:"command"`
-	Output   string        `json:"output"`
-	Error    string        `json:"error"`
-	ExitCode int           `json:"exit_code"`
-	Duration time.Duration `json:"duration"`
+    Command  string        `json:"command"`
+    Output   string        `json:"output"`
+    Error    string        `json:"error"`
+    ExitCode int           `json:"exit_code"`
+    Duration time.Duration `json:"duration"`
+    // Privileged 表示该命令结束时检测到的提示符是否为特权模式（以 '#' 结尾）
+    Privileged bool
 }
 
 // InteractiveOptions 交互会话选项
 // 目前支持在执行 "enable" 时识别密码提示并自动输入 enable 密码
 type InteractiveOptions struct {
-	EnablePassword string
-	ExitCommands   []string
-	// 新增：命令间隔与自动交互
-	CommandIntervalMS int
-	AutoInteractions  []AutoInteraction
+    EnablePassword string
+    ExitCommands   []string
+    // 新增：命令间隔与自动交互
+    CommandIntervalMS int
+    AutoInteractions  []AutoInteraction
+    // 是否启用“延迟回显跳过”（提示符+上一条命令回显），按平台控制
+    SkipDelayedEcho   bool
 }
 
 // AutoInteraction 自动交互对
@@ -581,6 +585,8 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 
 	// 捕获首个提示符的主机名前缀，用于后续更稳健的提示符判断
 	var promptPrefix string
+	// 记录最近一次检测到的提示符后缀，用于判断当前模式（如 '>' 用户模式、'#' 特权模式）
+	var lastPromptSuffix string
 
 	// 辅助函数：判断行是否是提示符（先清洗再匹配后缀；若已捕获前缀，则要求包含前缀）
 	isPrompt := func(line string) bool {
@@ -641,6 +647,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 						if prefix != "" {
 							promptPrefix = prefix
 						}
+						lastPromptSuffix = suf
 						break
 					}
 				}
@@ -671,6 +678,60 @@ StartCommands:
     // 记录上一条已发送命令，用于跳过其延迟回显（常见于网络设备在提示符后一并回显上一条命令）
     prevCmd := ""
     for _, cmd := range commands {
+		// 针对 Cisco 增强：如果仍处于用户模式 '>'，且提供了 enable 密码，则在当前命令之前自动补发一次 enable
+		// 注：opts.EnablePassword 仅在 Cisco 平台被设置，其他平台不会触发该逻辑
+		if opts != nil && opts.EnablePassword != "" && lastPromptSuffix == ">" && strings.EqualFold(strings.TrimSpace(cmd), "enable") {
+			// 若队列中本身就是 enable，则直接进入常规流程，由下面的读取逻辑处理
+		} else if opts != nil && opts.EnablePassword != "" && lastPromptSuffix == ">" && !strings.EqualFold(strings.TrimSpace(cmd), "enable") {
+			// 在发送实际命令前，补发一次 enable 并尝试进入特权模式
+			_, _ = stdin.Write([]byte("enable\r\n"))
+			// 在有限时间内处理可能的密码提示与模式切换
+			retryStart := time.Now()
+			pwSent := false
+			fallback := time.After(1500 * time.Millisecond)
+			for {
+				select {
+				case <-ctx.Done():
+					stdin.Close()
+					session.Close()
+					return results, ctx.Err()
+				case l := <-lineCh:
+					clean := sanitize(l)
+					low := strings.ToLower(clean)
+					// 密码提示识别后输入密码
+					if !pwSent && clean != "" && (strings.Contains(low, "password") || strings.Contains(low, "secret") || strings.Contains(low, "enable secret") || strings.Contains(low, "密码")) {
+						_, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+						pwSent = true
+						continue
+					}
+					if isPrompt(clean) {
+						trim := strings.TrimSpace(clean)
+						for _, suf := range promptSuffixes {
+							if strings.HasSuffix(trim, suf) {
+								lastPromptSuffix = suf
+								break
+							}
+						}
+						// 到达提示符后结束预处理，无论是否进入 '#'
+						goto PreCommandReady
+					}
+				case <-fallback:
+					if !pwSent {
+						_, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+						pwSent = true
+					}
+				case <-time.After(5 * time.Second):
+					// 预处理最多等待 5s，避免阻塞流程
+					goto PreCommandReady
+				}
+				// 简单的整体超时保护，避免极端情况下卡住
+				if time.Since(retryStart) > 8*time.Second {
+					goto PreCommandReady
+				}
+			}
+		PreCommandReady:
+			// 回到正常命令发送流程
+		}
 		// 写入命令；若写入失败，认为会话已不可用，返回错误以触发上层回退
 		if _, err := stdin.Write([]byte(cmd + "\r\n")); err != nil {
 			// 关闭输入并等待读取协程结束，避免资源泄露
@@ -688,20 +749,26 @@ StartCommands:
 		// 跳过命令回显（部分设备会回显命令，且可能因换行/分页被拆分）
 		echoRemain := strings.TrimSpace(cmd)
 		cmdStart := time.Now()
-		// 自动交互仅命中一次（每条命令），触发后不再重复执行
-		autoInteractDone := false
-		for {
-			select {
-			case <-ctx.Done():
-				stdin.Close()
-				session.Close()
-				return results, ctx.Err()
+        // 自动交互仅命中一次（每条命令），触发后不再重复执行
+        autoInteractDone := false
+        // 针对 enable 的密码输入增加超时回退：若未检测到提示，按时发送一次
+        enableFallbackSent := false
+        var enableFallback <-chan time.Time
+        if opts != nil && opts.EnablePassword != "" && strings.EqualFold(strings.TrimSpace(cmd), "enable") {
+            enableFallback = time.After(1500 * time.Millisecond)
+        }
+        for {
+            select {
+            case <-ctx.Done():
+                stdin.Close()
+                session.Close()
+                return results, ctx.Err()
             case line := <-lineCh:
                 // 统一清洗行内容用于比较和提示符检测
                 clean := sanitize(line)
                 // 若出现“提示符+上一条命令”的延迟回显，直接跳过，避免写入当前命令的输出
                 // 例如："hostname#terminal length 0" 在下一条命令开始时到达
-                if clean != "" && prevCmd != "" {
+                if opts != nil && opts.SkipDelayedEcho && clean != "" && prevCmd != "" {
                     candidate := stripPromptPrefix(clean)
                     pc := strings.TrimSpace(strings.ToLower(prevCmd))
                     cc := strings.TrimSpace(strings.ToLower(candidate))
@@ -742,13 +809,83 @@ StartCommands:
 					continue
 				}
 				// 若是提示符行（命令结束标志），不要写入输出，直接结束该命令
-                if isPrompt(clean) {
+				if isPrompt(clean) {
+					// 更新当前提示符后缀（模式）
+					trimmedPrompt := strings.TrimSpace(clean)
+					for _, suf := range promptSuffixes {
+						if strings.HasSuffix(trimmedPrompt, suf) {
+							lastPromptSuffix = suf
+							break
+						}
+					}
+					// 针对 enable 命令：校验提示符是否进入特权模式（以 '#' 结尾）
+					errStr := ""
+					exitCode := 0
+					if strings.EqualFold(strings.TrimSpace(cmd), "enable") {
+						if !strings.HasSuffix(trimmedPrompt, "#") {
+							// 未进入特权模式：自动补发一次 enable 并再次尝试密码
+							// 仅在本命令范围内重试一次，增强可用性
+							// 重试开始：重新发送 enable
+							_, _ = stdin.Write([]byte("enable\r\n"))
+							// 重置计时与密码回退
+							retryStart := time.Now()
+							enableRetryFallbackSent := false
+							enableRetryFallback := time.After(1500 * time.Millisecond)
+							for {
+								select {
+								case <-ctx.Done():
+									stdin.Close()
+									session.Close()
+									return results, ctx.Err()
+								case ln := <-lineCh:
+									cl := sanitize(ln)
+									lw := strings.ToLower(cl)
+									// 识别密码提示后再发送密码
+									if !enableRetryFallbackSent && cl != "" && (strings.Contains(lw, "password") || strings.Contains(lw, "secret") || strings.Contains(lw, "enable secret") || strings.Contains(lw, "密码")) {
+										_, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+										enableRetryFallbackSent = true
+										continue
+									}
+									if isPrompt(cl) {
+										tr := strings.TrimSpace(cl)
+										for _, sf := range promptSuffixes {
+											if strings.HasSuffix(tr, sf) {
+												lastPromptSuffix = sf
+												break
+											}
+										}
+										// 到达提示符即结束重试阶段
+										trimmedPrompt = tr
+										break
+									}
+								case <-enableRetryFallback:
+									if !enableRetryFallbackSent {
+										_, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+										enableRetryFallbackSent = true
+									}
+								case <-time.After(5 * time.Second):
+									// 最多等待 5s，避免阻塞
+									break
+								}
+								if time.Since(retryStart) > 8*time.Second {
+									break
+								}
+							}
+							// 重试结束后再次判断是否进入特权模式
+							if !strings.HasSuffix(trimmedPrompt, "#") {
+								// 未进入特权模式，标记错误但不阻断后续命令
+								errStr = "enable did not reach privileged prompt (#); still in user mode"
+								exitCode = -2
+							}
+						}
+					}
                     results = append(results, &CommandResult{
-                        Command:  cmd,
-                        Output:   out.String(),
-                        Error:    "",
-                        ExitCode: 0,
-                        Duration: time.Since(cmdStart),
+                        Command:    cmd,
+                        Output:     out.String(),
+                        Error:      errStr,
+                        ExitCode:   exitCode,
+                        Duration:   time.Since(cmdStart),
+                        Privileged: lastPromptSuffix == "#",
                     })
                     goto NextCmd
                 }
@@ -760,20 +897,21 @@ StartCommands:
 					sawContent = true
 				}
 
-				// 在执行 enable 时，遇到密码提示则自动输入密码
-				// 兼容常见提示："Password:", "password:", "Enter password:"
-				trimmed := clean
-				lower := strings.ToLower(trimmed)
-				if opts != nil && opts.EnablePassword != "" {
+                // 在执行 enable 时，遇到密码提示则自动输入密码
+                // 扩展识别范围："Password:", "Enter password:", "Password required", "Secret:", "enable secret", 中文"密码"
+                trimmed := clean
+                lower := strings.ToLower(trimmed)
+                if opts != nil && opts.EnablePassword != "" {
                     if strings.EqualFold(strings.TrimSpace(cmd), "enable") {
-                        if strings.Contains(lower, "password") {
+                        if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "enable secret") || strings.Contains(lower, "密码") {
                             // 写入 enable 密码并换行（使用 CRLF 提升网络设备兼容性）
                             _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+                            enableFallbackSent = true
                             // 不立即结束，继续等待提示符，以确保进入特权模式
                             continue
                         }
                     }
-				}
+                }
 
 				// 自动交互：匹配提示后自动发送响应（如 more/confirm），仅命中一次
 				if opts != nil && len(opts.AutoInteractions) > 0 && !autoInteractDone {
@@ -790,12 +928,19 @@ StartCommands:
 					}
 				}
 				// 提示符已在写入前处理
-			case <-time.After(30 * time.Second):
-				// 超时保护：将当前已读作为输出返回
-				results = append(results, &CommandResult{
-					Command:  cmd,
-					Output:   out.String(),
-					Error:    "command timeout",
+            case <-enableFallback:
+                if !enableFallbackSent {
+                    _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+                    enableFallbackSent = true
+                    // 继续等待提示符
+                    continue
+                }
+            case <-time.After(30 * time.Second):
+                // 超时保护：将当前已读作为输出返回
+                results = append(results, &CommandResult{
+                    Command:  cmd,
+                    Output:   out.String(),
+                    Error:    "command timeout",
 					ExitCode: -1,
 					Duration: time.Since(cmdStart),
 				})

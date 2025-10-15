@@ -1,0 +1,24 @@
+{
+  "task_id": "T-cisco-enable-001",
+  "task_name": "Cisco IOS enable validation",
+  "retry_flag": 1,
+  "timeout": 60,
+  "cli_list": [
+    "show version",
+    "show running-config",
+    "show ntp status",
+    "conf t"
+  ],
+  "devices": [
+    {
+      "device_ip": "139.196.196.96",
+      "device_name": "test-out-r1",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "port": 21201,
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "enable_password": "Eccom@12345"
+    }
+  ]
+}
