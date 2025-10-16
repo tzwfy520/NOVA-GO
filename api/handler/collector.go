@@ -242,7 +242,6 @@ type CustomerBatchRequest struct {
     TaskName  string           `json:"task_name,omitempty"`
     RetryFlag *int             `json:"retry_flag,omitempty"`
     Timeout   *int             `json:"timeout,omitempty"`
-    CliList   []string         `json:"cli_list"`
     Devices   []CustomerDevice `json:"devices"`
 }
 
@@ -256,6 +255,7 @@ type CustomerDevice struct {
     UserName        string   `json:"user_name"`
     Password        string   `json:"password"`
     EnablePassword  string   `json:"enable_password,omitempty"`
+    CliList         []string `json:"cli_list,omitempty"`
 }
 
 // SystemBatchRequest 系统预制采集批量请求
@@ -357,7 +357,7 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
                 UserName:        d.UserName,
                 Password:        d.Password,
                 EnablePassword:  d.EnablePassword,
-                CliList:         req.CliList,
+                CliList:         d.CliList,
                 RetryFlag:       req.RetryFlag,
                 Timeout:         req.Timeout,
                 Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "customer"},

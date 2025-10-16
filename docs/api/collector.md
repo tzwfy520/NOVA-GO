@@ -14,9 +14,8 @@
 - `password`：登录密码，必填。
 - `enable_password`：特权/enable 密码，选填。
   - 用途：当平台需要进入特权模式时使用（如 Cisco 的 `enable`）。未提供或平台不需要特权时忽略。
-- `cli_list`：命令列表，可为空/一个/多个命令。
-  - 自定义批量接口：为空时不会执行任何命令，返回空结果。
-  - 系统批量接口：为空时不会执行任何命令，返回空结果。
+- `devices[].cli_list`：自定义批量接口的设备级命令列表，可为空/一个/多个命令。
+- `device_list[].cli_list`：系统批量接口的设备级命令列表，可为空/一个/多个命令。
  - `retry_flag`：重试次数，选填；为空时使用系统内置交互默认值。
  - `timeout`：超时时间（秒），选填；为空时使用系统内置交互默认值。
 
@@ -89,8 +88,8 @@
 ### 自定义采集批量接口
 - 路径：`POST /api/v1/collector/batch/custom`
 - 输入参数：
-  - 统一参数：`task_id`、`task_name`、`retry_flag`、`timeout`、`cli_list`
-  - 设备参数（按设备数量组织为数组 `devices`）：`device_ip`、`device_name`、`device_platform`、`collect_protocol`、`user_name`、`password`、`port`
+  - 统一参数：`task_id`、`task_name`、`retry_flag`、`timeout`
+  - 设备参数（按设备数量组织为数组 `devices`）：`device_ip`、`device_name`、`device_platform`、`collect_protocol`、`user_name`、`password`、`port`、`cli_list`
  - 输出参数：按设备组织输出，每个设备包含设备标识与该设备对应的采集执行结果；新增 `port` 字段标识设备登陆端口。
 
 示例请求（custom/batch）：
@@ -100,7 +99,6 @@
   "task_name": "custom-batch-check",
   "retry_flag": 2,
   "timeout": 60,
-  "cli_list": ["show version", "show interfaces"],
   "devices": [
     {
       "device_ip": "10.0.0.2",
@@ -110,7 +108,8 @@
       "user_name": "ops",
       "password": "xxxx",
       "enable_password": "xxxx",
-      "port": 22
+      "port": 22,
+      "cli_list": ["show version", "show running-config"]
     },
     {
       "device_ip": "10.0.0.3",
@@ -119,7 +118,8 @@
       "collect_protocol": "ssh",
       "user_name": "ops",
       "password": "yyyy",
-      "port": 2222
+      "port": 2222,
+      "cli_list": ["display version", "display current-configuration"]
     }
   ]
 }

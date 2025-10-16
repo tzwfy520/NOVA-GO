@@ -19,23 +19,23 @@ import (
 
 // Request/Device structures for custom batch
 type CustomerDevice struct {
-	DeviceIP        string `json:"device_ip"`
-	Port            int    `json:"port,omitempty"`
-	DeviceName      string `json:"device_name,omitempty"`
-	DevicePlatform  string `json:"device_platform,omitempty"`
-	CollectProtocol string `json:"collect_protocol,omitempty"`
-	UserName        string `json:"user_name"`
-	Password        string `json:"password"`
-	EnablePassword  string `json:"enable_password,omitempty"`
+    DeviceIP        string `json:"device_ip"`
+    Port            int    `json:"port,omitempty"`
+    DeviceName      string `json:"device_name,omitempty"`
+    DevicePlatform  string `json:"device_platform,omitempty"`
+    CollectProtocol string `json:"collect_protocol,omitempty"`
+    UserName        string `json:"user_name"`
+    Password        string `json:"password"`
+    EnablePassword  string `json:"enable_password,omitempty"`
+    CliList         []string `json:"cli_list,omitempty"`
 }
 
 type CustomerBatchRequest struct {
-	TaskID    string           `json:"task_id"`
-	TaskName  string           `json:"task_name,omitempty"`
-	RetryFlag *int             `json:"retry_flag,omitempty"`
-	Timeout   *int             `json:"timeout,omitempty"`
-	CliList   []string         `json:"cli_list"`
-	Devices   []CustomerDevice `json:"devices"`
+    TaskID    string           `json:"task_id"`
+    TaskName  string           `json:"task_name,omitempty"`
+    RetryFlag *int             `json:"retry_flag,omitempty"`
+    Timeout   *int             `json:"timeout,omitempty"`
+    Devices   []CustomerDevice `json:"devices"`
 }
 
 // System batch endpoint payloads (per-device CLI list)
@@ -371,54 +371,49 @@ func main() {
 				},
 			},
 		}
-	} else {
-		reqCustom = CustomerBatchRequest{
-			TaskID:    "Test-2001",
-			TaskName:  "custom-batch-check",
-			RetryFlag: &rf,
-			Timeout:   &to,
-			CliList: []string{
-				"display version",
-				"display license",
-				"display current",
-				"show run",
-				"show version",
-				"show clock",
-			},
-			Devices: []CustomerDevice{
-				{
-					DeviceIP:        "139.196.196.96",
-					Port:            21201,
-					DeviceName:      "test-out-sw1",
-					DevicePlatform:  "cisco_ios",
-					CollectProtocol: "ssh",
-					UserName:        "eccom123",
-					Password:        "Eccom@12345",
-					EnablePassword:  *enablePwd,
-				},
-				{
-					DeviceIP:        "139.196.196.96",
-					Port:            21203,
-					DeviceName:      "test-out-r1",
-					DevicePlatform:  "h3c_sr",
-					CollectProtocol: "ssh",
-					UserName:        "eccom123",
-					Password:        "Eccom@12345",
-					EnablePassword:  *enablePwd,
-				},
-				{
-					DeviceIP:        "139.196.196.96",
-					Port:            20204,
-					DeviceName:      "test-out-r2",
-					DevicePlatform:  "juniper",
-					CollectProtocol: "ssh",
-					UserName:        "eccom123",
-					Password:        "Eccom@12345",
-					EnablePassword:  *enablePwd,
-				},
-			},
-		}
-	}
+    } else {
+        reqCustom = CustomerBatchRequest{
+            TaskID:    "Test-2001",
+            TaskName:  "custom-batch-check",
+            RetryFlag: &rf,
+            Timeout:   &to,
+            Devices: []CustomerDevice{
+                {
+                    DeviceIP:        "139.196.196.96",
+                    Port:            21201,
+                    DeviceName:      "test-out-sw1",
+                    DevicePlatform:  "cisco_ios",
+                    CollectProtocol: "ssh",
+                    UserName:        "eccom123",
+                    Password:        "Eccom@12345",
+                    EnablePassword:  *enablePwd,
+                    CliList:         []string{"show version", "show running-config | include hostname"},
+                },
+                {
+                    DeviceIP:        "139.196.196.96",
+                    Port:            21203,
+                    DeviceName:      "test-out-r1",
+                    DevicePlatform:  "h3c_sr",
+                    CollectProtocol: "ssh",
+                    UserName:        "eccom123",
+                    Password:        "Eccom@12345",
+                    EnablePassword:  *enablePwd,
+                    CliList:         []string{"display version", "display interface brief"},
+                },
+                {
+                    DeviceIP:        "139.196.196.96",
+                    Port:            20204,
+                    DeviceName:      "test-out-r2",
+                    DevicePlatform:  "juniper",
+                    CollectProtocol: "ssh",
+                    UserName:        "eccom123",
+                    Password:        "Eccom@12345",
+                    EnablePassword:  *enablePwd,
+                    CliList:         []string{"show version", "show configuration | display set | match hostname"},
+                },
+            },
+        }
+    }
 
 	var body []byte
 	var err error
