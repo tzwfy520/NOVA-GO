@@ -166,6 +166,8 @@ func setDefaults() {
             "prompt_suffixes":      []string{">", "#"},
             "disable_paging_cmds":  []string{"terminal length 0"},
             "enable_required":       true,
+            "enable_cli":            "enable",
+            "except_output":         "Password:",
             "skip_delayed_echo":     true,
             "error_hints":           []string{"invalid input detected", "incomplete command", "ambiguous command", "unknown command", "invalid autocommand", "line has invalid autocommand"},
             "auto_interactions": []map[string]string{
@@ -263,4 +265,9 @@ type PlatformDefaultsConfig struct {
     ErrorHints         []string               `mapstructure:"error_hints"`
     SkipDelayedEcho    bool                   `mapstructure:"skip_delayed_echo"`
     EnableRequired     bool                   `mapstructure:"enable_required"`
+    // 提权设置：当 enable_required 为 true 时，可指定提权命令与密码提示匹配
+    // enable_cli 定义提权命令（例如 "enable" 或 Linux 平台的 "sudo -i"）
+    // except_output 定义收到哪条输出后自动输入 enable 密码
+    EnableCLI          string                 `mapstructure:"enable_cli"`
+    EnableExceptOutput string                 `mapstructure:"except_output"`
 }

@@ -362,9 +362,15 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
             }
             return false
         }
-        // enable 注入（Cisco等需要特权模式）
-        if dd.EnableRequired && !hasCmd("enable") {
-            out = append(out, "enable")
+        // 提权命令注入（如 Cisco enable 或 Linux sudo -i）
+        if dd.EnableRequired {
+            ecmd := strings.TrimSpace(dd.EnableCLI)
+            if ecmd == "" {
+                ecmd = "enable"
+            }
+            if !hasCmd(ecmd) {
+                out = append(out, ecmd)
+            }
         }
         // 分页关闭命令注入
         for _, pc := range dd.DisablePagingCmds {
@@ -506,26 +512,53 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 		promptSuffixes = []string{"#", ">", "]"}
 	}
 
-    // 在交互会话中自动处理 Cisco enable 密码
-	// 配置交互选项：平台特定退出命令与可选 enable 密码
-	interactiveOpts := &ssh.InteractiveOptions{}
-	if strings.HasPrefix(platform, "cisco") {
-		interactiveOpts.ExitCommands = []string{"exit"}
-		// 优先使用请求中的 enable 密码
-		if strings.TrimSpace(request.EnablePassword) != "" {
-			interactiveOpts.EnablePassword = strings.TrimSpace(request.EnablePassword)
-		} else {
-			// 兼容性回退：若未提供 enable 密码，尝试使用登录密码作为 enable 密码
-			// 许多环境中登录密码与 enable 密码一致，避免无法进入特权模式
-			if strings.TrimSpace(request.Password) != "" {
-				interactiveOpts.EnablePassword = strings.TrimSpace(request.Password)
-			}
-		}
-	} else if strings.HasPrefix(platform, "h3c") || strings.HasPrefix(platform, "huawei") {
-		interactiveOpts.ExitCommands = []string{"quit", "exit"}
-	} else {
-		interactiveOpts.ExitCommands = []string{"exit", "quit"}
-	}
+    // 在交互会话中自动处理提权密码
+    // 配置交互选项：平台特定退出命令与可选 enable 密码/提示
+    interactiveOpts := &ssh.InteractiveOptions{}
+    if strings.HasPrefix(platform, "cisco") {
+        interactiveOpts.ExitCommands = []string{"exit"}
+    } else if strings.HasPrefix(platform, "h3c") || strings.HasPrefix(platform, "huawei") {
+        interactiveOpts.ExitCommands = []string{"quit", "exit"}
+    } else {
+        interactiveOpts.ExitCommands = []string{"exit", "quit"}
+    }
+    // 处理设备级提权配置：当 enable_required 为 true 时启用提权命令与密码
+    {
+        dd, ok := s.config.Collector.DeviceDefaults[platform]
+        if !ok {
+            if strings.HasPrefix(platform, "huawei") {
+                dd, ok = s.config.Collector.DeviceDefaults["huawei"]
+            } else if strings.HasPrefix(platform, "h3c") {
+                dd, ok = s.config.Collector.DeviceDefaults["h3c"]
+            } else if strings.HasPrefix(platform, "cisco") {
+                dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+            }
+        }
+        if ok && dd.EnableRequired {
+            // 设置提权命令与提示匹配
+            interactiveOpts.EnableCLI = strings.TrimSpace(dd.EnableCLI)
+            interactiveOpts.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
+            // 优先使用请求中的 enable 密码；否则回退为登录密码
+            if strings.TrimSpace(request.EnablePassword) != "" {
+                interactiveOpts.EnablePassword = strings.TrimSpace(request.EnablePassword)
+            } else if strings.TrimSpace(request.Password) != "" {
+                interactiveOpts.EnablePassword = strings.TrimSpace(request.Password)
+            }
+        } else if strings.HasPrefix(platform, "cisco") {
+            // 兼容旧逻辑：Cisco 未显式配置时仍尝试使用 enable
+            if strings.TrimSpace(request.EnablePassword) != "" {
+                interactiveOpts.EnablePassword = strings.TrimSpace(request.EnablePassword)
+            } else if strings.TrimSpace(request.Password) != "" {
+                interactiveOpts.EnablePassword = strings.TrimSpace(request.Password)
+            }
+            if strings.TrimSpace(interactiveOpts.EnableCLI) == "" {
+                interactiveOpts.EnableCLI = "enable"
+            }
+            if strings.TrimSpace(interactiveOpts.EnableExpectOutput) == "" {
+                interactiveOpts.EnableExpectOutput = "Password"
+            }
+        }
+    }
 	// 应用内置默认的命令间隔与自动交互配置
 	if defaults.CommandIntervalMS > 0 {
 		interactiveOpts.CommandIntervalMS = defaults.CommandIntervalMS
@@ -609,24 +642,38 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
     }
 
 	// Cisco 平台：在内部命令过滤前检查 enable 结果，若未进入 '#' 模式则记录错误，并在后续结果中进行提示传播
-	enableFailedMsg := ""
-	if strings.HasPrefix(platform, "cisco") {
-		for _, r := range rawResults {
-			if r == nil {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(r.Command), "enable") {
-				if r.ExitCode != 0 || strings.TrimSpace(r.Error) != "" {
-					enableFailedMsg = strings.TrimSpace(r.Error)
-					if enableFailedMsg == "" {
-						enableFailedMsg = "enable did not reach privileged prompt (#); still in user mode"
-					}
-					s.logTaskError(request.TaskID, fmt.Sprintf("Enable mode not entered: %s", enableFailedMsg))
-				}
-				break
-			}
-		}
-	}
+    enableFailedMsg := ""
+    {
+        dd, ok := s.config.Collector.DeviceDefaults[platform]
+        if !ok {
+            if strings.HasPrefix(platform, "huawei") {
+                dd, ok = s.config.Collector.DeviceDefaults["huawei"]
+            } else if strings.HasPrefix(platform, "h3c") {
+                dd, ok = s.config.Collector.DeviceDefaults["h3c"]
+            } else if strings.HasPrefix(platform, "cisco") {
+                dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+            }
+        }
+        enableCmd := strings.TrimSpace(dd.EnableCLI)
+        if enableCmd == "" {
+            enableCmd = "enable"
+        }
+        for _, r := range rawResults {
+            if r == nil {
+                continue
+            }
+            if strings.EqualFold(strings.TrimSpace(r.Command), enableCmd) {
+                if r.ExitCode != 0 || strings.TrimSpace(r.Error) != "" {
+                    enableFailedMsg = strings.TrimSpace(r.Error)
+                    if enableFailedMsg == "" {
+                        enableFailedMsg = "enable did not reach privileged prompt (#); still in user mode"
+                    }
+                    s.logTaskError(request.TaskID, fmt.Sprintf("Enable mode not entered: %s", enableFailedMsg))
+                }
+                break
+            }
+        }
+    }
 
 	// 记录成功日志
 	s.logTaskInfo(request.TaskID, fmt.Sprintf("SSH collection completed, executed %d commands", len(rawResults)))
@@ -663,7 +710,11 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
         }
         if ok {
             if dd.EnableRequired {
-                internalCmds[strings.ToLower(strings.TrimSpace("enable"))] = struct{}{}
+                ecmd := strings.TrimSpace(dd.EnableCLI)
+                if ecmd == "" {
+                    ecmd = "enable"
+                }
+                internalCmds[strings.ToLower(strings.TrimSpace(ecmd))] = struct{}{}
             }
             for _, pc := range dd.DisablePagingCmds {
                 if strings.TrimSpace(pc) == "" {

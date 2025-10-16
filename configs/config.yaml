@@ -49,6 +49,12 @@ collector:
       prompt_suffixes: [">", "#"]
       disable_paging_cmds: ["terminal length 0"]
       enable_required: true
+      # 当需要提权时，设置提权命令与提示匹配
+      # 示例：
+      # enable_cli: "enable"            # 或 Linux: "sudo -i"
+      # except_output: "Password:"      # 接收到该输出后自动输入 enable 密码
+      enable_cli: "enable"
+      except_output: "Password:"
       skip_delayed_echo: true
       error_hints:
         - "invalid input detected"

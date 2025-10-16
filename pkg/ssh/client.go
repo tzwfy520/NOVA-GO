@@ -50,13 +50,17 @@ type CommandResult struct {
 // InteractiveOptions 交互会话选项
 // 目前支持在执行 "enable" 时识别密码提示并自动输入 enable 密码
 type InteractiveOptions struct {
-	EnablePassword string
-	ExitCommands   []string
-	// 新增：命令间隔与自动交互
-	CommandIntervalMS int
-	AutoInteractions  []AutoInteraction
-	// 是否启用“延迟回显跳过”（提示符+上一条命令回显），按平台控制
-	SkipDelayedEcho bool
+    EnablePassword string
+    // 通用提权配置：当当前命令等于 EnableCLI 时，进入提权流程
+    // EnableExpectOutput 用于匹配密码提示（大小写不敏感，包含匹配）
+    EnableCLI         string
+    EnableExpectOutput string
+    ExitCommands   []string
+    // 新增：命令间隔与自动交互
+    CommandIntervalMS int
+    AutoInteractions  []AutoInteraction
+    // 是否启用“延迟回显跳过”（提示符+上一条命令回显），按平台控制
+    SkipDelayedEcho bool
 }
 
 // AutoInteraction 自动交互对
@@ -764,16 +768,28 @@ StartCommands:
 		// 跳过命令回显（部分设备会回显命令，且可能因换行/分页被拆分）
 		echoRemain := strings.TrimSpace(cmd)
 		cmdStart := time.Now()
-		// 自动交互仅命中一次（每条命令），触发后不再重复执行
-		autoInteractDone := false
-		// 针对 enable 的密码输入增加超时回退：若未检测到提示，按时发送一次
-		enableFallbackSent := false
-		var enableFallback <-chan time.Time
-		if opts != nil && opts.EnablePassword != "" && strings.EqualFold(strings.TrimSpace(cmd), "enable") {
-			enableFallback = time.After(1500 * time.Millisecond)
-		}
-		for {
-			select {
+        // 自动交互仅命中一次（每条命令），触发后不再重复执行
+        autoInteractDone := false
+        // 针对提权命令的密码输入增加超时回退：若未检测到提示，按时发送一次
+        enableFallbackSent := false
+        var enableFallback <-chan time.Time
+        // 判断当前命令是否为提权命令
+        isEnableCmd := func(curr string) bool {
+            ctrim := strings.TrimSpace(curr)
+            if opts != nil {
+                ecli := strings.TrimSpace(opts.EnableCLI)
+                if ecli != "" {
+                    return strings.EqualFold(ctrim, ecli)
+                }
+            }
+            // 回退：若未配置 EnableCLI，则默认识别 "enable"
+            return strings.EqualFold(ctrim, "enable")
+        }
+        if opts != nil && opts.EnablePassword != "" && isEnableCmd(cmd) {
+            enableFallback = time.After(1500 * time.Millisecond)
+        }
+        for {
+            select {
             case <-ctx.Done():
                 stdin.Close()
                 session.Close()
@@ -832,27 +848,27 @@ StartCommands:
 					continue
 				}
 				// 若是提示符行（命令结束标志），不要写入输出，直接结束该命令
-				if isPrompt(clean) {
-					// 针对 enable 命令：校验提示符是否进入特权模式（以 '#' 结尾）
-					errStr := ""
-					exitCode := 0
-					if strings.EqualFold(strings.TrimSpace(cmd), "enable") {
-						trimmedPrompt := strings.TrimSpace(clean)
-						if !strings.HasSuffix(trimmedPrompt, "#") {
-							// 未进入特权模式，标记错误但不阻断后续命令
-							errStr = "enable did not reach privileged prompt (#); still in user mode"
-							exitCode = -2
-						}
-					}
-					results = append(results, &CommandResult{
-						Command:  cmd,
-						Output:   out.String(),
-						Error:    errStr,
-						ExitCode: exitCode,
-						Duration: time.Since(cmdStart),
-					})
-					goto NextCmd
-				}
+                if isPrompt(clean) {
+                    // 针对提权命令：校验提示符是否进入特权模式（以 '#' 结尾）
+                    errStr := ""
+                    exitCode := 0
+                    if isEnableCmd(cmd) {
+                        trimmedPrompt := strings.TrimSpace(clean)
+                        if !strings.HasSuffix(trimmedPrompt, "#") {
+                            // 未进入特权模式，标记错误但不阻断后续命令
+                            errStr = "enable did not reach privileged prompt (#); still in user mode"
+                            exitCode = -2
+                        }
+                    }
+                    results = append(results, &CommandResult{
+                        Command:  cmd,
+                        Output:   out.String(),
+                        Error:    errStr,
+                        ExitCode: exitCode,
+                        Duration: time.Since(cmdStart),
+                    })
+                    goto NextCmd
+                }
 
 				// 写入正常内容
 				out.WriteString(clean)
@@ -865,17 +881,25 @@ StartCommands:
 				// 扩展识别范围："Password:", "Enter password:", "Password required", "Secret:", "enable secret", 中文"密码"
 				trimmed := clean
 				lower := strings.ToLower(trimmed)
-				if opts != nil && opts.EnablePassword != "" {
-					if strings.EqualFold(strings.TrimSpace(cmd), "enable") {
-						if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "enable secret") || strings.Contains(lower, "密码") {
-							// 写入 enable 密码并换行（使用 CRLF 提升网络设备兼容性）
-							_, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
-							enableFallbackSent = true
-							// 不立即结束，继续等待提示符，以确保进入特权模式
-							continue
-						}
-					}
-				}
+                if opts != nil && opts.EnablePassword != "" && isEnableCmd(cmd) {
+                    // 优先根据配置的 EnableExpectOutput 进行匹配（大小写不敏感，包含匹配）
+                    exp := strings.TrimSpace(opts.EnableExpectOutput)
+                    if exp != "" {
+                        if strings.Contains(lower, strings.ToLower(exp)) {
+                            _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+                            enableFallbackSent = true
+                            // 不立即结束，继续等待提示符，以确保进入特权模式
+                            continue
+                        }
+                    } else {
+                        // 回退启发式：常见密码提示关键词
+                        if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "enable secret") || strings.Contains(lower, "密码") {
+                            _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+                            enableFallbackSent = true
+                            continue
+                        }
+                    }
+                }
 
 				// 自动交互：匹配提示后自动发送响应（如 more/confirm），仅命中一次
 				if opts != nil && len(opts.AutoInteractions) > 0 && !autoInteractDone {
@@ -892,13 +916,13 @@ StartCommands:
 					}
 				}
 				// 提示符已在写入前处理
-			case <-enableFallback:
-				if !enableFallbackSent {
-					_, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
-					enableFallbackSent = true
-					// 继续等待提示符
-					continue
-				}
+            case <-enableFallback:
+                if !enableFallbackSent {
+                    _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+                    enableFallbackSent = true
+                    // 继续等待提示符
+                    continue
+                }
             case <-time.After(30 * time.Second):
                 // 超时保护：将当前已读作为输出返回
                 results = append(results, &CommandResult{
