@@ -1,22 +1,22 @@
 package service
 
 import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "strings"
-    "sync"
-    "time"
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
 
-    "github.com/google/uuid"
-    "gorm.io/gorm"
-    "gorm.io/gorm/clause"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
-    "github.com/sshcollectorpro/sshcollectorpro/internal/config"
-    "github.com/sshcollectorpro/sshcollectorpro/internal/database"
-    "github.com/sshcollectorpro/sshcollectorpro/internal/model"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
 )
 
 // CollectorService 采集器服务
@@ -83,117 +83,117 @@ type platformInteractDefaults struct {
 
 // getPlatformDefaults 返回平台内置交互默认值（不再依赖插件）
 func getPlatformDefaults(platform string) platformInteractDefaults {
-    p := strings.TrimSpace(strings.ToLower(platform))
+	p := strings.TrimSpace(strings.ToLower(platform))
 
-    // 先确定内置平台默认
-    base := platformInteractDefaults{}
-    switch p {
-    case "cisco_ios":
-        base = platformInteractDefaults{
-            Timeout:           60,
-            Retries:           2,
-            Threads:           4,
-            Concurrent:        5,
-            PromptSuffixes:    []string{">", "#"},
-            CommandIntervalMS: 200,
-            AutoInteractions: []struct{ ExpectOutput, AutoSend string }{
-                {ExpectOutput: "--more--", AutoSend: " "},
-                {ExpectOutput: "more", AutoSend: " "},
-                {ExpectOutput: "press any key", AutoSend: " "},
-                {ExpectOutput: "confirm", AutoSend: "y"},
-                {ExpectOutput: "[yes/no]", AutoSend: "yes"},
-            },
-            ErrorHints:      []string{"invalid input detected", "incomplete command", "ambiguous command", "unknown command", "invalid autocommand", "line has invalid autocommand"},
-            SkipDelayedEcho: true,
-        }
-    case "huawei_s", "huawei_ce":
-        base = platformInteractDefaults{
-            Timeout:           60,
-            Retries:           2,
-            Threads:           4,
-            Concurrent:        5,
-            PromptSuffixes:    []string{">", "#", "]"},
-            CommandIntervalMS: 300,
-            AutoInteractions: []struct{ ExpectOutput, AutoSend string }{
-                {ExpectOutput: "more", AutoSend: " "},
-                {ExpectOutput: "press any key", AutoSend: " "},
-                {ExpectOutput: "confirm", AutoSend: "y"},
-            },
-            ErrorHints:      []string{"error:", "unrecognized command"},
-            SkipDelayedEcho: true,
-        }
-    case "h3c_s", "h3c_sr", "h3c_msr":
-        base = platformInteractDefaults{
-            Timeout:           75,
-            Retries:           2,
-            Threads:           4,
-            Concurrent:        5,
-            PromptSuffixes:    []string{">", "#", "]"},
-            CommandIntervalMS: 150,
-            AutoInteractions: []struct{ ExpectOutput, AutoSend string }{
-                {ExpectOutput: "more", AutoSend: " "},
-                {ExpectOutput: "press any key", AutoSend: " "},
-            },
-            ErrorHints:      []string{"error:", "unrecognized command"},
-            SkipDelayedEcho: true,
-        }
-    default:
-        base = platformInteractDefaults{
-            Timeout:           30,
-            Retries:           1,
-            Threads:           4,
-            Concurrent:        5,
-            PromptSuffixes:    []string{"#", ">", "]"},
-            CommandIntervalMS: 150,
-            AutoInteractions: []struct{ ExpectOutput, AutoSend string }{
-                {ExpectOutput: "more", AutoSend: " "},
-                {ExpectOutput: "press any key", AutoSend: " "},
-                {ExpectOutput: "confirm", AutoSend: "y"},
-            },
-            ErrorHints:      []string{"error", "invalid", "unrecognized", "incomplete", "ambiguous"},
-            SkipDelayedEcho: true,
-        }
-    }
+	// 先确定内置平台默认
+	base := platformInteractDefaults{}
+	switch p {
+	case "cisco_ios":
+		base = platformInteractDefaults{
+			Timeout:           60,
+			Retries:           2,
+			Threads:           4,
+			Concurrent:        5,
+			PromptSuffixes:    []string{">", "#"},
+			CommandIntervalMS: 200,
+			AutoInteractions: []struct{ ExpectOutput, AutoSend string }{
+				{ExpectOutput: "--more--", AutoSend: " "},
+				{ExpectOutput: "more", AutoSend: " "},
+				{ExpectOutput: "press any key", AutoSend: " "},
+				{ExpectOutput: "confirm", AutoSend: "y"},
+				{ExpectOutput: "[yes/no]", AutoSend: "yes"},
+			},
+			ErrorHints:      []string{"invalid input detected", "incomplete command", "ambiguous command", "unknown command", "invalid autocommand", "line has invalid autocommand"},
+			SkipDelayedEcho: true,
+		}
+	case "huawei_s", "huawei_ce":
+		base = platformInteractDefaults{
+			Timeout:           60,
+			Retries:           2,
+			Threads:           4,
+			Concurrent:        5,
+			PromptSuffixes:    []string{">", "#", "]"},
+			CommandIntervalMS: 300,
+			AutoInteractions: []struct{ ExpectOutput, AutoSend string }{
+				{ExpectOutput: "more", AutoSend: " "},
+				{ExpectOutput: "press any key", AutoSend: " "},
+				{ExpectOutput: "confirm", AutoSend: "y"},
+			},
+			ErrorHints:      []string{"error:", "unrecognized command"},
+			SkipDelayedEcho: true,
+		}
+	case "h3c_s", "h3c_sr", "h3c_msr":
+		base = platformInteractDefaults{
+			Timeout:           75,
+			Retries:           2,
+			Threads:           4,
+			Concurrent:        5,
+			PromptSuffixes:    []string{">", "#", "]"},
+			CommandIntervalMS: 150,
+			AutoInteractions: []struct{ ExpectOutput, AutoSend string }{
+				{ExpectOutput: "more", AutoSend: " "},
+				{ExpectOutput: "press any key", AutoSend: " "},
+			},
+			ErrorHints:      []string{"error:", "unrecognized command"},
+			SkipDelayedEcho: true,
+		}
+	default:
+		base = platformInteractDefaults{
+			Timeout:           30,
+			Retries:           1,
+			Threads:           4,
+			Concurrent:        5,
+			PromptSuffixes:    []string{"#", ">", "]"},
+			CommandIntervalMS: 150,
+			AutoInteractions: []struct{ ExpectOutput, AutoSend string }{
+				{ExpectOutput: "more", AutoSend: " "},
+				{ExpectOutput: "press any key", AutoSend: " "},
+				{ExpectOutput: "confirm", AutoSend: "y"},
+			},
+			ErrorHints:      []string{"error", "invalid", "unrecognized", "incomplete", "ambiguous"},
+			SkipDelayedEcho: true,
+		}
+	}
 
-    // 再从配置进行覆盖（collector.device_defaults）
-    if cfg := config.Get(); cfg != nil {
-        key := p
-        dd, ok := cfg.Collector.DeviceDefaults[key]
-        if !ok {
-            // 合并家族键
-            if strings.HasPrefix(p, "huawei") {
-                dd, ok = cfg.Collector.DeviceDefaults["huawei"]
-            } else if strings.HasPrefix(p, "h3c") {
-                dd, ok = cfg.Collector.DeviceDefaults["h3c"]
-            }
-        }
-        if ok {
-            if len(dd.PromptSuffixes) > 0 {
-                base.PromptSuffixes = dd.PromptSuffixes
-            }
-            // 覆盖跳过延迟回显
-            base.SkipDelayedEcho = dd.SkipDelayedEcho
-            if len(dd.ErrorHints) > 0 {
-                base.ErrorHints = dd.ErrorHints
-            }
-            if len(dd.AutoInteractions) > 0 {
-                mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.AutoInteractions))
-                for _, ai := range dd.AutoInteractions {
-                    eo := strings.TrimSpace(ai.ExpectOutput)
-                    as := strings.TrimSpace(ai.AutoSend)
-                    if eo == "" || as == "" {
-                        continue
-                    }
-                    mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
-                }
-                if len(mapped) > 0 {
-                    base.AutoInteractions = mapped
-                }
-            }
-        }
-    }
+	// 再从配置进行覆盖（collector.device_defaults）
+	if cfg := config.Get(); cfg != nil {
+		key := p
+		dd, ok := cfg.Collector.DeviceDefaults[key]
+		if !ok {
+			// 合并家族键
+			if strings.HasPrefix(p, "huawei") {
+				dd, ok = cfg.Collector.DeviceDefaults["huawei"]
+			} else if strings.HasPrefix(p, "h3c") {
+				dd, ok = cfg.Collector.DeviceDefaults["h3c"]
+			}
+		}
+		if ok {
+			if len(dd.PromptSuffixes) > 0 {
+				base.PromptSuffixes = dd.PromptSuffixes
+			}
+			// 覆盖跳过延迟回显
+			base.SkipDelayedEcho = dd.SkipDelayedEcho
+			if len(dd.ErrorHints) > 0 {
+				base.ErrorHints = dd.ErrorHints
+			}
+			if len(dd.AutoInteractions) > 0 {
+				mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.AutoInteractions))
+				for _, ai := range dd.AutoInteractions {
+					eo := strings.TrimSpace(ai.ExpectOutput)
+					as := strings.TrimSpace(ai.AutoSend)
+					if eo == "" || as == "" {
+						continue
+					}
+					mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
+				}
+				if len(mapped) > 0 {
+					base.AutoInteractions = mapped
+				}
+			}
+		}
+	}
 
-    return base
+	return base
 }
 
 // 已移除：平台默认系统采集命令逻辑
@@ -277,125 +277,125 @@ func (s *CollectorService) Stop() error {
 
 // ExecuteTask 执行采集任务
 func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequest) (*CollectResponse, error) {
-    if !s.running {
-        return nil, fmt.Errorf("collector service is not running")
-    }
+	if !s.running {
+		return nil, fmt.Errorf("collector service is not running")
+	}
 
-    // 在进入工作协程前先解析平台默认与有效超时/重试，用于队列等待控制
-    platform := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
-    if platform == "" {
-        platform = "default"
-    }
-    // 默认协议
-    if proto := strings.TrimSpace(strings.ToLower(request.CollectProtocol)); proto == "" {
-        request.CollectProtocol = "ssh"
-    }
-    if request.CollectProtocol != "ssh" {
-        return nil, fmt.Errorf("unsupported collect_protocol: %s", request.CollectProtocol)
-    }
+	// 在进入工作协程前先解析平台默认与有效超时/重试，用于队列等待控制
+	platform := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
+	if platform == "" {
+		platform = "default"
+	}
+	// 默认协议
+	if proto := strings.TrimSpace(strings.ToLower(request.CollectProtocol)); proto == "" {
+		request.CollectProtocol = "ssh"
+	}
+	if request.CollectProtocol != "ssh" {
+		return nil, fmt.Errorf("unsupported collect_protocol: %s", request.CollectProtocol)
+	}
 
-    interactDefaults := getPlatformDefaults(platform)
-    // 计算有效超时与重试（用于队列等待与任务上下文）
-    effTimeout := 30
-    if request.Timeout != nil && *request.Timeout > 0 {
-        effTimeout = *request.Timeout
-    } else if interactDefaults.Timeout > 0 {
-        effTimeout = interactDefaults.Timeout
-    }
-    effRetries := 0
-    if request.RetryFlag != nil && *request.RetryFlag >= 0 {
-        effRetries = *request.RetryFlag
-    } else if interactDefaults.Retries > 0 {
-        effRetries = interactDefaults.Retries
-    }
+	interactDefaults := getPlatformDefaults(platform)
+	// 计算有效超时与重试（用于队列等待与任务上下文）
+	effTimeout := 30
+	if request.Timeout != nil && *request.Timeout > 0 {
+		effTimeout = *request.Timeout
+	} else if interactDefaults.Timeout > 0 {
+		effTimeout = interactDefaults.Timeout
+	}
+	effRetries := 0
+	if request.RetryFlag != nil && *request.RetryFlag >= 0 {
+		effRetries = *request.RetryFlag
+	} else if interactDefaults.Retries > 0 {
+		effRetries = interactDefaults.Retries
+	}
 
-    // 获取工作协程：使用基于有效超时的内部等待上下文，避免HTTP上下文过早结束
-    waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Duration(effTimeout)*time.Second)
-    defer waitCancel()
-    select {
-    case s.workers <- struct{}{}:
-        defer func() { <-s.workers }()
-    case <-waitCtx.Done():
-        return nil, fmt.Errorf("task queue wait timeout after %ds: %w", effTimeout, waitCtx.Err())
-    }
+	// 获取工作协程：使用基于有效超时的内部等待上下文，避免HTTP上下文过早结束
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Duration(effTimeout)*time.Second)
+	defer waitCancel()
+	select {
+	case s.workers <- struct{}{}:
+		defer func() { <-s.workers }()
+	case <-waitCtx.Done():
+		return nil, fmt.Errorf("task queue wait timeout after %ds: %w", effTimeout, waitCtx.Err())
+	}
 
-    startTime := time.Now()
-    response := &CollectResponse{
-        TaskID:    request.TaskID,
-        Timestamp: startTime,
-        Metadata:  request.Metadata,
-    }
+	startTime := time.Now()
+	response := &CollectResponse{
+		TaskID:    request.TaskID,
+		Timestamp: startTime,
+		Metadata:  request.Metadata,
+	}
 
-    // 以上已解析平台与有效超时/重试
+	// 以上已解析平台与有效超时/重试
 
-    // 构造命令清单：以平台配置为依据，注入必要的预命令（enable、分页关闭），再追加用户命令
-    // 注：路由层不注入任何平台默认命令，服务层负责按设备平台动态插入
-    commands := make([]string, 0, len(request.CliList)+4)
-    // 预命令注入
-    preCmds := func() []string {
-        out := make([]string, 0, 4)
-        p := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
-        if p == "" {
-            return out
-        }
-        // 查找设备默认配置
-        dd, ok := s.config.Collector.DeviceDefaults[p]
-        if !ok {
-            if strings.HasPrefix(p, "huawei") {
-                dd, ok = s.config.Collector.DeviceDefaults["huawei"]
-            } else if strings.HasPrefix(p, "h3c") {
-                dd, ok = s.config.Collector.DeviceDefaults["h3c"]
-            } else if strings.HasPrefix(p, "cisco") {
-                dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
-            }
-        }
-        if !ok {
-            return out
-        }
+	// 构造命令清单：以平台配置为依据，注入必要的预命令（enable、分页关闭），再追加用户命令
+	// 注：路由层不注入任何平台默认命令，服务层负责按设备平台动态插入
+	commands := make([]string, 0, len(request.CliList)+4)
+	// 预命令注入
+	preCmds := func() []string {
+		out := make([]string, 0, 4)
+		p := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
+		if p == "" {
+			return out
+		}
+		// 查找设备默认配置
+		dd, ok := s.config.Collector.DeviceDefaults[p]
+		if !ok {
+			if strings.HasPrefix(p, "huawei") {
+				dd, ok = s.config.Collector.DeviceDefaults["huawei"]
+			} else if strings.HasPrefix(p, "h3c") {
+				dd, ok = s.config.Collector.DeviceDefaults["h3c"]
+			} else if strings.HasPrefix(p, "cisco") {
+				dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+			}
+		}
+		if !ok {
+			return out
+		}
 
-        // 避免重复：若用户命令里已有相同命令，则不再注入
-        hasCmd := func(cmd string) bool {
-            key := strings.ToLower(strings.TrimSpace(cmd))
-            for _, c := range request.CliList {
-                if strings.ToLower(strings.TrimSpace(c)) == key {
-                    return true
-                }
-            }
-            return false
-        }
-        // 提权命令注入（如 Cisco enable 或 Linux sudo -i）
-        if dd.EnableRequired {
-            ecmd := strings.TrimSpace(dd.EnableCLI)
-            if ecmd == "" {
-                ecmd = "enable"
-            }
-            if !hasCmd(ecmd) {
-                out = append(out, ecmd)
-            }
-        }
-        // 分页关闭命令注入
-        for _, pc := range dd.DisablePagingCmds {
-            if strings.TrimSpace(pc) == "" {
-                continue
-            }
-            if !hasCmd(pc) {
-                out = append(out, pc)
-            }
-        }
-        return out
-    }()
+		// 避免重复：若用户命令里已有相同命令，则不再注入
+		hasCmd := func(cmd string) bool {
+			key := strings.ToLower(strings.TrimSpace(cmd))
+			for _, c := range request.CliList {
+				if strings.ToLower(strings.TrimSpace(c)) == key {
+					return true
+				}
+			}
+			return false
+		}
+		// 提权命令注入（如 Cisco enable 或 Linux sudo -i）
+		if dd.EnableRequired {
+			ecmd := strings.TrimSpace(dd.EnableCLI)
+			if ecmd == "" {
+				ecmd = "enable"
+			}
+			if !hasCmd(ecmd) {
+				out = append(out, ecmd)
+			}
+		}
+		// 分页关闭命令注入
+		for _, pc := range dd.DisablePagingCmds {
+			if strings.TrimSpace(pc) == "" {
+				continue
+			}
+			if !hasCmd(pc) {
+				out = append(out, pc)
+			}
+		}
+		return out
+	}()
 
-    // 拼装最终命令队列：预命令在前，用户命令在后
-    if len(preCmds) > 0 {
-        commands = append(commands, preCmds...)
-    }
-    if len(request.CliList) > 0 {
-        commands = append(commands, request.CliList...)
-    }
-    // 命令为空：允许继续（将返回空结果）
+	// 拼装最终命令队列：预命令在前，用户命令在后
+	if len(preCmds) > 0 {
+		commands = append(commands, preCmds...)
+	}
+	if len(request.CliList) > 0 {
+		commands = append(commands, request.CliList...)
+	}
+	// 命令为空：允许继续（将返回空结果）
 
-    // 记录命令队列
-    logger.Info("Prepared command queue", "task_id", request.TaskID, "platform", request.DevicePlatform, "commands", strings.Join(commands, ";"))
+	// 记录命令队列
+	logger.Info("Prepared command queue", "task_id", request.TaskID, "platform", request.DevicePlatform, "commands", strings.Join(commands, ";"))
 
 	// 创建任务记录
 	// 端口默认 22
@@ -513,56 +513,56 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 		promptSuffixes = []string{"#", ">", "]"}
 	}
 
-    // 在交互会话中自动处理提权密码
-    // 配置交互选项：平台特定退出命令与可选 enable 密码/提示
-    interactiveOpts := &ssh.InteractiveOptions{}
-    if strings.HasPrefix(platform, "cisco") {
-        interactiveOpts.ExitCommands = []string{"exit"}
-    } else if strings.HasPrefix(platform, "h3c") || strings.HasPrefix(platform, "huawei") {
-        interactiveOpts.ExitCommands = []string{"quit", "exit"}
-    } else {
-        interactiveOpts.ExitCommands = []string{"exit", "quit"}
-    }
-    // 处理设备级提权配置：当 enable_required 为 true 时启用提权命令与密码
-    {
-        dd, ok := s.config.Collector.DeviceDefaults[platform]
-        if !ok {
-            if strings.HasPrefix(platform, "huawei") {
-                dd, ok = s.config.Collector.DeviceDefaults["huawei"]
-            } else if strings.HasPrefix(platform, "h3c") {
-                dd, ok = s.config.Collector.DeviceDefaults["h3c"]
-            } else if strings.HasPrefix(platform, "cisco") {
-                dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
-            } else if strings.HasPrefix(platform, "linux") {
-                // 兼容 Linux 家族平台（例如 linux_ubuntu / linux_debian）
-                dd, ok = s.config.Collector.DeviceDefaults["linux"]
-            }
-        }
-        if ok && dd.EnableRequired {
-            // 设置提权命令与提示匹配
-            interactiveOpts.EnableCLI = strings.TrimSpace(dd.EnableCLI)
-            interactiveOpts.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
-            // 优先使用请求中的 enable 密码；否则回退为登录密码
-            if strings.TrimSpace(request.EnablePassword) != "" {
-                interactiveOpts.EnablePassword = strings.TrimSpace(request.EnablePassword)
-            } else if strings.TrimSpace(request.Password) != "" {
-                interactiveOpts.EnablePassword = strings.TrimSpace(request.Password)
-            }
-        } else if strings.HasPrefix(platform, "cisco") {
-            // 兼容旧逻辑：Cisco 未显式配置时仍尝试使用 enable
-            if strings.TrimSpace(request.EnablePassword) != "" {
-                interactiveOpts.EnablePassword = strings.TrimSpace(request.EnablePassword)
-            } else if strings.TrimSpace(request.Password) != "" {
-                interactiveOpts.EnablePassword = strings.TrimSpace(request.Password)
-            }
-            if strings.TrimSpace(interactiveOpts.EnableCLI) == "" {
-                interactiveOpts.EnableCLI = "enable"
-            }
-            if strings.TrimSpace(interactiveOpts.EnableExpectOutput) == "" {
-                interactiveOpts.EnableExpectOutput = "Password"
-            }
-        }
-    }
+	// 在交互会话中自动处理提权密码
+	// 配置交互选项：平台特定退出命令与可选 enable 密码/提示
+	interactiveOpts := &ssh.InteractiveOptions{}
+	if strings.HasPrefix(platform, "cisco") {
+		interactiveOpts.ExitCommands = []string{"exit"}
+	} else if strings.HasPrefix(platform, "h3c") || strings.HasPrefix(platform, "huawei") {
+		interactiveOpts.ExitCommands = []string{"quit", "exit"}
+	} else {
+		interactiveOpts.ExitCommands = []string{"exit", "quit"}
+	}
+	// 处理设备级提权配置：当 enable_required 为 true 时启用提权命令与密码
+	{
+		dd, ok := s.config.Collector.DeviceDefaults[platform]
+		if !ok {
+			if strings.HasPrefix(platform, "huawei") {
+				dd, ok = s.config.Collector.DeviceDefaults["huawei"]
+			} else if strings.HasPrefix(platform, "h3c") {
+				dd, ok = s.config.Collector.DeviceDefaults["h3c"]
+			} else if strings.HasPrefix(platform, "cisco") {
+				dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+			} else if strings.HasPrefix(platform, "linux") {
+				// 兼容 Linux 家族平台（例如 linux_ubuntu / linux_debian）
+				dd, ok = s.config.Collector.DeviceDefaults["linux"]
+			}
+		}
+		if ok && dd.EnableRequired {
+			// 设置提权命令与提示匹配
+			interactiveOpts.EnableCLI = strings.TrimSpace(dd.EnableCLI)
+			interactiveOpts.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
+			// 优先使用请求中的 enable 密码；否则回退为登录密码
+			if strings.TrimSpace(request.EnablePassword) != "" {
+				interactiveOpts.EnablePassword = strings.TrimSpace(request.EnablePassword)
+			} else if strings.TrimSpace(request.Password) != "" {
+				interactiveOpts.EnablePassword = strings.TrimSpace(request.Password)
+			}
+		} else if strings.HasPrefix(platform, "cisco") {
+			// 兼容旧逻辑：Cisco 未显式配置时仍尝试使用 enable
+			if strings.TrimSpace(request.EnablePassword) != "" {
+				interactiveOpts.EnablePassword = strings.TrimSpace(request.EnablePassword)
+			} else if strings.TrimSpace(request.Password) != "" {
+				interactiveOpts.EnablePassword = strings.TrimSpace(request.Password)
+			}
+			if strings.TrimSpace(interactiveOpts.EnableCLI) == "" {
+				interactiveOpts.EnableCLI = "enable"
+			}
+			if strings.TrimSpace(interactiveOpts.EnableExpectOutput) == "" {
+				interactiveOpts.EnableExpectOutput = "Password"
+			}
+		}
+	}
 	// 应用内置默认的命令间隔与自动交互配置
 	if defaults.CommandIntervalMS > 0 {
 		interactiveOpts.CommandIntervalMS = defaults.CommandIntervalMS
@@ -579,129 +579,129 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 	}
 	// 按平台默认启用/关闭“延迟回显跳过”
 	interactiveOpts.SkipDelayedEcho = defaults.SkipDelayedEcho
-    // 合并配置层的 auto_interactions：在默认/设备级基础上追加或覆盖
-    if cfgAIs := s.config.Collector.Interact.AutoInteractions; len(cfgAIs) > 0 {
-        // 建立索引以按 ExpectOutput 覆盖
-        idx := map[string]int{}
-        for i, ai := range interactiveOpts.AutoInteractions {
-            key := strings.ToLower(strings.TrimSpace(ai.ExpectOutput))
-            if key != "" {
-                idx[key] = i
-            }
-        }
-        // 追加或覆盖配置的自动交互项
-        for _, ai := range cfgAIs {
-            eo := strings.TrimSpace(ai.ExpectOutput)
-            as := strings.TrimSpace(ai.AutoSend)
-            if eo == "" || as == "" {
-                continue
-            }
-            key := strings.ToLower(eo)
-            if pos, ok := idx[key]; ok {
-                // 覆盖现有项
-                interactiveOpts.AutoInteractions[pos] = ssh.AutoInteraction{ExpectOutput: eo, AutoSend: as}
-            } else {
-                interactiveOpts.AutoInteractions = append(interactiveOpts.AutoInteractions, ssh.AutoInteraction{ExpectOutput: eo, AutoSend: as})
-                idx[key] = len(interactiveOpts.AutoInteractions) - 1
-            }
-        }
-    }
-    // 增加重试：根据 retries 参数对交互式执行进行有限次重试
-    var rawResults []*ssh.CommandResult
-    for attempt := 0; attempt <= retries; attempt++ {
-        rawResults, err = client.ExecuteInteractiveCommands(ctx, commands, promptSuffixes, interactiveOpts)
-        if err == nil {
-            break
-        }
-        s.logTaskWarn(request.TaskID, fmt.Sprintf("interactive attempt %d/%d failed: %v", attempt+1, retries+1, err))
-        // 短暂退避，避免设备端限流或会话抖动
-        time.Sleep(200 * time.Millisecond)
-    }
-    if err != nil {
-        // 交互式失败：先重置连接，再进行非交互回退，避免复用异常连接导致 "disconnect message type 97"
-        _ = s.sshPool.CloseConnection(connInfo)
-        // 使用连接级独立超时上下文进行重连，避免复用已到期的任务上下文
-        reconnCtx, cancel := context.WithTimeout(context.Background(), s.config.SSH.Timeout)
-        defer cancel()
-        client, err2 := s.sshPool.GetConnection(reconnCtx, connInfo)
-        if err2 != nil || client == nil {
-            s.logTaskError(request.TaskID, fmt.Sprintf("fallback reconnect failed: %v", err2))
-            // 保留原始交互错误，避免误判
-            return nil, err
-        }
+	// 合并配置层的 auto_interactions：在默认/设备级基础上追加或覆盖
+	if cfgAIs := s.config.Collector.Interact.AutoInteractions; len(cfgAIs) > 0 {
+		// 建立索引以按 ExpectOutput 覆盖
+		idx := map[string]int{}
+		for i, ai := range interactiveOpts.AutoInteractions {
+			key := strings.ToLower(strings.TrimSpace(ai.ExpectOutput))
+			if key != "" {
+				idx[key] = i
+			}
+		}
+		// 追加或覆盖配置的自动交互项
+		for _, ai := range cfgAIs {
+			eo := strings.TrimSpace(ai.ExpectOutput)
+			as := strings.TrimSpace(ai.AutoSend)
+			if eo == "" || as == "" {
+				continue
+			}
+			key := strings.ToLower(eo)
+			if pos, ok := idx[key]; ok {
+				// 覆盖现有项
+				interactiveOpts.AutoInteractions[pos] = ssh.AutoInteraction{ExpectOutput: eo, AutoSend: as}
+			} else {
+				interactiveOpts.AutoInteractions = append(interactiveOpts.AutoInteractions, ssh.AutoInteraction{ExpectOutput: eo, AutoSend: as})
+				idx[key] = len(interactiveOpts.AutoInteractions) - 1
+			}
+		}
+	}
+	// 增加重试：根据 retries 参数对交互式执行进行有限次重试
+	var rawResults []*ssh.CommandResult
+	for attempt := 0; attempt <= retries; attempt++ {
+		rawResults, err = client.ExecuteInteractiveCommands(ctx, commands, promptSuffixes, interactiveOpts)
+		if err == nil {
+			break
+		}
+		s.logTaskWarn(request.TaskID, fmt.Sprintf("interactive attempt %d/%d failed: %v", attempt+1, retries+1, err))
+		// 短暂退避，避免设备端限流或会话抖动
+		time.Sleep(200 * time.Millisecond)
+	}
+	if err != nil {
+		// 交互式失败：先重置连接，再进行非交互回退，避免复用异常连接导致 "disconnect message type 97"
+		_ = s.sshPool.CloseConnection(connInfo)
+		// 使用连接级独立超时上下文进行重连，避免复用已到期的任务上下文
+		reconnCtx, cancel := context.WithTimeout(context.Background(), s.config.SSH.Timeout)
+		defer cancel()
+		client, err2 := s.sshPool.GetConnection(reconnCtx, connInfo)
+		if err2 != nil || client == nil {
+			s.logTaskError(request.TaskID, fmt.Sprintf("fallback reconnect failed: %v", err2))
+			// 保留原始交互错误，避免误判
+			return nil, err
+		}
 
-        // 针对 Linux 平台的回退增强：当需要提权且交互失败时，使用 sudo -S 为每条命令单独提权
-        // 注意：此路径仅用于回退，优先级低于交互式提权；避免在输出中泄露密码
-        tmp := make([]*ssh.CommandResult, 0, len(commands))
-        successAny := false
-        // 解析平台默认以判断是否需要回退提权
-        platform := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
-        dd, ok := s.config.Collector.DeviceDefaults[platform]
-        if !ok {
-            if strings.HasPrefix(platform, "huawei") {
-                dd, ok = s.config.Collector.DeviceDefaults["huawei"]
-            } else if strings.HasPrefix(platform, "h3c") {
-                dd, ok = s.config.Collector.DeviceDefaults["h3c"]
-            } else if strings.HasPrefix(platform, "cisco") {
-                dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
-            } else if strings.HasPrefix(platform, "linux") {
-                dd, ok = s.config.Collector.DeviceDefaults["linux"]
-            }
-        }
-        // 组装回退命令列表：若为 Linux 且需要提权，则对每条用户命令进行 sudo 包裹
-        fallbackCmds := make([]string, 0, len(commands))
-        if ok && dd.EnableRequired && strings.HasPrefix(platform, "linux") {
-            // 选择用于 sudo 的密码：优先 enable_password，其次登录密码
-            sudoPwd := strings.TrimSpace(request.EnablePassword)
-            if sudoPwd == "" {
-                sudoPwd = strings.TrimSpace(request.Password)
-            }
-            // 构造通用 sudo 模式：通过管道传递密码，抑制提示
-            // 说明：为避免在输出中暴露密码，不将管道命令的原始输出回显到结果中
-            // 此处仍使用 ExecuteCommand 执行组合命令，设备端不会回显密码本身
-            enableCmd := strings.TrimSpace(dd.EnableCLI)
-            if enableCmd == "" {
-                enableCmd = "enable"
-            }
-            for _, c := range commands {
-                // 跳过内部的提权预命令（例如 sudo -i 或 enable）
-                if strings.EqualFold(strings.TrimSpace(c), enableCmd) {
-                    continue
-                }
-                // 对每条命令应用 sudo -S 提权；-p "" 取消提示，避免阻塞
-                // 使用单引号包裹密码以降低特殊字符影响（不处理嵌套单引号场景）
-                wrapped := c
-                if sudoPwd != "" {
-                    wrapped = fmt.Sprintf("echo '%s' | sudo -S -p '' %s", sudoPwd, c)
-                } else {
-                    wrapped = fmt.Sprintf("sudo %s", c)
-                }
-                fallbackCmds = append(fallbackCmds, wrapped)
-            }
-        } else {
-            // 非 Linux 或无需提权：原样执行
-            fallbackCmds = append(fallbackCmds, commands...)
-        }
-        // 执行回退命令
-        for _, cmd := range fallbackCmds {
-            res, e := client.ExecuteCommand(reconnCtx, cmd)
-            if e != nil {
-                s.logTaskError(request.TaskID, fmt.Sprintf("fallback exec failed for '%s': %v", cmd, e))
-            } else if res != nil {
-                successAny = true
-            }
-            tmp = append(tmp, res)
-        }
-        if successAny {
-            // 回退成功，记录警告而非错误，避免误判任务失败
-            s.logTaskWarn(request.TaskID, fmt.Sprintf("interactive session failed; used non-interactive fallback: %v", err))
-            rawResults = tmp
-        } else {
-            // 回退也失败，保留原始错误
-            s.logTaskError(request.TaskID, fmt.Sprintf("interactive session failed and fallback produced no output: %v", err))
-            return nil, err
-        }
-    }
+		// 针对 Linux 平台的回退增强：当需要提权且交互失败时，使用 sudo -S 为每条命令单独提权
+		// 注意：此路径仅用于回退，优先级低于交互式提权；避免在输出中泄露密码
+		tmp := make([]*ssh.CommandResult, 0, len(commands))
+		successAny := false
+		// 解析平台默认以判断是否需要回退提权
+		platform = strings.TrimSpace(strings.ToLower(request.DevicePlatform))
+		dd, ok := s.config.Collector.DeviceDefaults[platform]
+		if !ok {
+			if strings.HasPrefix(platform, "huawei") {
+				dd, ok = s.config.Collector.DeviceDefaults["huawei"]
+			} else if strings.HasPrefix(platform, "h3c") {
+				dd, ok = s.config.Collector.DeviceDefaults["h3c"]
+			} else if strings.HasPrefix(platform, "cisco") {
+				dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+			} else if strings.HasPrefix(platform, "linux") {
+				dd, ok = s.config.Collector.DeviceDefaults["linux"]
+			}
+		}
+		// 组装回退命令列表：若为 Linux 且需要提权，则对每条用户命令进行 sudo 包裹
+		fallbackCmds := make([]string, 0, len(commands))
+		if ok && dd.EnableRequired && strings.HasPrefix(platform, "linux") {
+			// 选择用于 sudo 的密码：优先 enable_password，其次登录密码
+			sudoPwd := strings.TrimSpace(request.EnablePassword)
+			if sudoPwd == "" {
+				sudoPwd = strings.TrimSpace(request.Password)
+			}
+			// 构造通用 sudo 模式：通过管道传递密码，抑制提示
+			// 说明：为避免在输出中暴露密码，不将管道命令的原始输出回显到结果中
+			// 此处仍使用 ExecuteCommand 执行组合命令，设备端不会回显密码本身
+			enableCmd := strings.TrimSpace(dd.EnableCLI)
+			if enableCmd == "" {
+				enableCmd = "enable"
+			}
+			for _, c := range commands {
+				// 跳过内部的提权预命令（例如 sudo -i 或 enable）
+				if strings.EqualFold(strings.TrimSpace(c), enableCmd) {
+					continue
+				}
+				// 对每条命令应用 sudo -S 提权；-p "" 取消提示，避免阻塞
+				// 使用单引号包裹密码以降低特殊字符影响（不处理嵌套单引号场景）
+				wrapped := c
+				if sudoPwd != "" {
+					wrapped = fmt.Sprintf("echo '%s' | sudo -S -p '' %s", sudoPwd, c)
+				} else {
+					wrapped = fmt.Sprintf("sudo %s", c)
+				}
+				fallbackCmds = append(fallbackCmds, wrapped)
+			}
+		} else {
+			// 非 Linux 或无需提权：原样执行
+			fallbackCmds = append(fallbackCmds, commands...)
+		}
+		// 执行回退命令
+		for _, cmd := range fallbackCmds {
+			res, e := client.ExecuteCommand(reconnCtx, cmd)
+			if e != nil {
+				s.logTaskError(request.TaskID, fmt.Sprintf("fallback exec failed for '%s': %v", cmd, e))
+			} else if res != nil {
+				successAny = true
+			}
+			tmp = append(tmp, res)
+		}
+		if successAny {
+			// 回退成功，记录警告而非错误，避免误判任务失败
+			s.logTaskWarn(request.TaskID, fmt.Sprintf("interactive session failed; used non-interactive fallback: %v", err))
+			rawResults = tmp
+		} else {
+			// 回退也失败，保留原始错误
+			s.logTaskError(request.TaskID, fmt.Sprintf("interactive session failed and fallback produced no output: %v", err))
+			return nil, err
+		}
+	}
 
 	// 在内部命令过滤前检查 enable 结果：若未进入 '#' 模式则记录错误
 	enableFailedMsg := ""
@@ -748,53 +748,53 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 
 	// 格式化解析
 	platform = strings.TrimSpace(strings.ToLower(request.DevicePlatform))
-    if platform == "" {
-        platform = "default"
-    }
-    // 外部采集插件已移除，不进行插件解析
+	if platform == "" {
+		platform = "default"
+	}
+	// 外部采集插件已移除，不进行插件解析
 
-    // 显示用原始命令队列：路由层已决定是否预组装系统命令，这里直接回显请求中的命令
-    displayCmds := func() []string {
-        out := make([]string, 0, len(request.CliList))
-        if len(request.CliList) > 0 {
-            out = append(out, request.CliList...)
-        }
-        return out
-    }()
+	// 显示用原始命令队列：路由层已决定是否预组装系统命令，这里直接回显请求中的命令
+	displayCmds := func() []string {
+		out := make([]string, 0, len(request.CliList))
+		if len(request.CliList) > 0 {
+			out = append(out, request.CliList...)
+		}
+		return out
+	}()
 
-    // 过滤掉服务层注入的“内部预命令”，使其不体现在最终结果中
-    // 动态来源：配置中的 device_defaults（enable、分页关闭命令）
-    internalCmds := map[string]struct{}{}
-    {
-        dd, ok := s.config.Collector.DeviceDefaults[platform]
-        if !ok {
-            if strings.HasPrefix(platform, "huawei") {
-                dd, ok = s.config.Collector.DeviceDefaults["huawei"]
-            } else if strings.HasPrefix(platform, "h3c") {
-                dd, ok = s.config.Collector.DeviceDefaults["h3c"]
-            } else if strings.HasPrefix(platform, "cisco") {
-                dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
-            } else if strings.HasPrefix(platform, "linux") {
-                // 兼容 Linux 家族平台（例如 linux_ubuntu / linux_debian）
-                dd, ok = s.config.Collector.DeviceDefaults["linux"]
-            }
-        }
-        if ok {
-            if dd.EnableRequired {
-                ecmd := strings.TrimSpace(dd.EnableCLI)
-                if ecmd == "" {
-                    ecmd = "enable"
-                }
-                internalCmds[strings.ToLower(strings.TrimSpace(ecmd))] = struct{}{}
-            }
-            for _, pc := range dd.DisablePagingCmds {
-                if strings.TrimSpace(pc) == "" {
-                    continue
-                }
-                internalCmds[strings.ToLower(strings.TrimSpace(pc))] = struct{}{}
-            }
-        }
-    }
+	// 过滤掉服务层注入的“内部预命令”，使其不体现在最终结果中
+	// 动态来源：配置中的 device_defaults（enable、分页关闭命令）
+	internalCmds := map[string]struct{}{}
+	{
+		dd, ok := s.config.Collector.DeviceDefaults[platform]
+		if !ok {
+			if strings.HasPrefix(platform, "huawei") {
+				dd, ok = s.config.Collector.DeviceDefaults["huawei"]
+			} else if strings.HasPrefix(platform, "h3c") {
+				dd, ok = s.config.Collector.DeviceDefaults["h3c"]
+			} else if strings.HasPrefix(platform, "cisco") {
+				dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+			} else if strings.HasPrefix(platform, "linux") {
+				// 兼容 Linux 家族平台（例如 linux_ubuntu / linux_debian）
+				dd, ok = s.config.Collector.DeviceDefaults["linux"]
+			}
+		}
+		if ok {
+			if dd.EnableRequired {
+				ecmd := strings.TrimSpace(dd.EnableCLI)
+				if ecmd == "" {
+					ecmd = "enable"
+				}
+				internalCmds[strings.ToLower(strings.TrimSpace(ecmd))] = struct{}{}
+			}
+			for _, pc := range dd.DisablePagingCmds {
+				if strings.TrimSpace(pc) == "" {
+					continue
+				}
+				internalCmds[strings.ToLower(strings.TrimSpace(pc))] = struct{}{}
+			}
+		}
+	}
 
 	filtered := make([]*ssh.CommandResult, 0, len(rawResults))
 	for _, r := range rawResults {
@@ -810,12 +810,12 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 		filtered = append(filtered, r)
 	}
 
-    out := make([]*CommandResultView, 0, len(filtered))
-    // 解析模式：不再依赖 origin，改为从 metadata.collect_mode 派生
-    collectMode := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", request.Metadata["collect_mode"])))
-    if collectMode == "" {
-        collectMode = "customer"
-    }
+	out := make([]*CommandResultView, 0, len(filtered))
+	// 解析模式：不再依赖 origin，改为从 metadata.collect_mode 派生
+	collectMode := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", request.Metadata["collect_mode"])))
+	if collectMode == "" {
+		collectMode = "customer"
+	}
 	// 辅助：根据配置移除原始输出中的分页提示等行
 	stripPagerPrompts := func(src string) string {
 		if src == "" {
@@ -891,14 +891,14 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 			displayCmd = displayCmds[dispIdx]
 		}
 		dispIdx++
-        // 当前不进行结构化解析，保持空数组以兼容 API 字段
-        var fmtRows interface{} = []map[string]interface{}{}
+		// 当前不进行结构化解析，保持空数组以兼容 API 字段
+		var fmtRows interface{} = []map[string]interface{}{}
 		// 错误提示检测：如配置了 error_hints，当输出行以提示前缀开头时标记错误
-    detectedErr := ""
-    if r != nil && r.Error == "" && collectMode != "customer" {
-        // 合并平台默认错误提示：优先使用配置的 error_hints，并追加平台默认
-        // 以确保诸如 Cisco "invalid autocommand" 之类的提示能够被识别
-        merged := make([]string, 0, len(s.config.Collector.Interact.ErrorHints)+len(defaults.ErrorHints))
+		detectedErr := ""
+		if r != nil && r.Error == "" && collectMode != "customer" {
+			// 合并平台默认错误提示：优先使用配置的 error_hints，并追加平台默认
+			// 以确保诸如 Cisco "invalid autocommand" 之类的提示能够被识别
+			merged := make([]string, 0, len(s.config.Collector.Interact.ErrorHints)+len(defaults.ErrorHints))
 			// 先加入配置中的 hints
 			merged = append(merged, s.config.Collector.Interact.ErrorHints...)
 			// 再追加平台默认 hints（去重）
@@ -1089,17 +1089,17 @@ func (s *CollectorService) cleanupExpiredTasks() {
 
 // saveTask 保存任务到数据库
 func (s *CollectorService) saveTask(task *model.Task) error {
-    // 如果主键已存在则进行更新（upsert），避免重复任务ID导致插入失败
-    return database.WithRetry(func(db *gorm.DB) error {
-        return db.Clauses(clause.OnConflict{UpdateAll: true}).Create(task).Error
-    }, 5, 50*time.Millisecond)
+	// 如果主键已存在则进行更新（upsert），避免重复任务ID导致插入失败
+	return database.WithRetry(func(db *gorm.DB) error {
+		return db.Clauses(clause.OnConflict{UpdateAll: true}).Create(task).Error
+	}, 5, 50*time.Millisecond)
 }
 
 // updateTask 更新任务状态
 func (s *CollectorService) updateTask(task *model.Task) error {
-    return database.WithRetry(func(db *gorm.DB) error {
-        return db.Save(task).Error
-    }, 5, 50*time.Millisecond)
+	return database.WithRetry(func(db *gorm.DB) error {
+		return db.Save(task).Error
+	}, 5, 50*time.Millisecond)
 }
 
 // 已移除 Redis 缓存函数
@@ -1112,29 +1112,29 @@ func (s *CollectorService) logTaskInfo(taskID, message string) {
 
 // logTaskError 记录任务错误日志
 func (s *CollectorService) logTaskError(taskID, message string) {
-    logger.Error("Task error", "task_id", taskID, "message", message)
-    s.saveTaskLog(taskID, "ERROR", message)
+	logger.Error("Task error", "task_id", taskID, "message", message)
+	s.saveTaskLog(taskID, "ERROR", message)
 }
 
 // logTaskWarn 记录任务警告日志
 func (s *CollectorService) logTaskWarn(taskID, message string) {
-    logger.Warn("Task warn", "task_id", taskID, "message", message)
-    s.saveTaskLog(taskID, "WARN", message)
+	logger.Warn("Task warn", "task_id", taskID, "message", message)
+	s.saveTaskLog(taskID, "WARN", message)
 }
 
 // saveTaskLog 保存任务日志
 func (s *CollectorService) saveTaskLog(taskID, level, message string) {
-    taskLog := &model.TaskLog{
-        ID:        uuid.NewString(),
-        TaskID:    taskID,
-        Level:     level,
-        Message:   message,
-        CreatedAt: time.Now(),
-    }
+	taskLog := &model.TaskLog{
+		ID:        uuid.NewString(),
+		TaskID:    taskID,
+		Level:     level,
+		Message:   message,
+		CreatedAt: time.Now(),
+	}
 
-    if err := database.WithRetry(func(db *gorm.DB) error {
-        return db.Create(taskLog).Error
-    }, 5, 50*time.Millisecond); err != nil {
-        logger.Warn("Failed to save task log", "task_id", taskID, "error", err)
-    }
+	if err := database.WithRetry(func(db *gorm.DB) error {
+		return db.Create(taskLog).Error
+	}, 5, 50*time.Millisecond); err != nil {
+		logger.Warn("Failed to save task log", "task_id", taskID, "error", err)
+	}
 }

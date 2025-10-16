@@ -5,8 +5,8 @@ server:
   host: "0.0.0.0"
   port: 18000
   mode: "release"  # debug, release, test
-  read_timeout: 60s
-  write_timeout: 60s
+  read_timeout: 30s
+  write_timeout: 30s
 
 # 采集器配置
 collector:
@@ -152,10 +152,10 @@ log:
 # 采集数据存储（运行时可覆盖默认值）
 storage:
   minio:
-    host: "127.0.0.1"
-    port: 9000
+    host: "139.196.196.96"
+    port: 29000
     access_key: "minioadmin"
-    secret_key: "minioadmin"
+    secret_key: "Eccom@2024"
     bucket: "sshcollector-raw"
     secure: false
   postgres:
@@ -164,3 +164,17 @@ storage:
     username: "postgres"
     password: "postgres"
     database: "sshcollector"
+
+# 备份服务配置（本地存储为默认）
+backup:
+  storage_backend: "minio"   # local | minio
+  prefix: "configs"          # 顶层保存目录前缀（base_dir 下的一级目录）
+  aggregate:
+    enabled: true             # 是否启用聚合写入
+    filename: "all_cli.txt"   # 聚合文件名，可带扩展名
+    aggregate_only: false     # 启用后仅生产聚合文件（跳过逐命令写入）
+  local:
+    base_dir: "./data/backups"
+    prefix: ""               # 可选的局部前缀，最终路径 prefix/local.prefix/save_dir
+    mkdir_if_missing: true
+    compress: false

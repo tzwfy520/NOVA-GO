@@ -12,12 +12,13 @@ import (
 
 // Config 应用配置结构
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Collector CollectorConfig `mapstructure:"collector"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Storage   StorageConfig   `mapstructure:"storage"`
-	SSH       SSHConfig       `mapstructure:"ssh"`
-	Log       LogConfig       `mapstructure:"log"`
+    Server    ServerConfig    `mapstructure:"server"`
+    Collector CollectorConfig `mapstructure:"collector"`
+    Database  DatabaseConfig  `mapstructure:"database"`
+    Storage   StorageConfig   `mapstructure:"storage"`
+    SSH       SSHConfig       `mapstructure:"ssh"`
+    Log       LogConfig       `mapstructure:"log"`
+    Backup    BackupConfig    `mapstructure:"backup"`
 }
 
 // ServerConfig 服务器配置
@@ -64,8 +65,35 @@ type SQLiteConfig struct {
 
 // StorageConfig 采集数据存储配置（用于原始与格式化数据）
 type StorageConfig struct {
-	Minio    MinioConfig    `mapstructure:"minio"`
-	Postgres PostgresConfig `mapstructure:"postgres"`
+    Minio    MinioConfig    `mapstructure:"minio"`
+    Postgres PostgresConfig `mapstructure:"postgres"`
+}
+
+// BackupConfig 备份服务配置
+type BackupConfig struct {
+    // StorageBackend 默认存储后端：local | minio
+    StorageBackend string             `mapstructure:"storage_backend"`
+    // Prefix 顶层保存目录前缀（与请求中的 save_dir 组合）
+    Prefix         string             `mapstructure:"prefix"`
+    Local          LocalBackupConfig  `mapstructure:"local"`
+    // Aggregate 聚合配置（是否将所有 CLI 输出写入单一文件）
+    Aggregate      AggregateConfig    `mapstructure:"aggregate"`
+}
+
+// LocalBackupConfig 本地存储配置
+type LocalBackupConfig struct {
+    BaseDir        string `mapstructure:"base_dir"`
+    Prefix         string `mapstructure:"prefix"`
+    MkdirIfMissing bool   `mapstructure:"mkdir_if_missing"`
+    Compress       bool   `mapstructure:"compress"`
+}
+
+// AggregateConfig 聚合写入配置
+type AggregateConfig struct {
+    Enabled  bool   `mapstructure:"enabled"`
+    Filename string `mapstructure:"filename"` // 可带扩展名，例如 all_cli.txt
+    // AggregateOnly 启用后仅生成聚合文件，跳过逐命令写入
+    AggregateOnly bool `mapstructure:"aggregate_only"`
 }
 
 // MinioConfig 对象存储配置（原始数据）
@@ -136,9 +164,17 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	var config Config
-	if err := viper.Unmarshal(&config); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
-	}
+    if err := viper.Unmarshal(&config); err != nil {
+        return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+    }
+
+    // 兼容旧键名：backup.backup_backend -> backup.storage_backend
+    if strings.TrimSpace(config.Backup.StorageBackend) == "" {
+        if viper.IsSet("backup.backup_backend") {
+            bb := strings.TrimSpace(viper.GetString("backup.backup_backend"))
+            if bb != "" { config.Backup.StorageBackend = bb }
+        }
+    }
 
 	// 环境变量替换
 	config = replaceEnvVars(config)
@@ -211,14 +247,29 @@ func setDefaults() {
 		},
 	})
 
-	// 默认并发档位配置
-	viper.SetDefault("collector.concurrency_profile", "S")
-	viper.SetDefault("collector.concurrency_profiles", map[string]int{
-		"S":  8,  // 2c4g
-		"M":  16, // 4c8g
-		"L":  32, // 8c16g
-		"XL": 64, // 16c32g
-	})
+    // 默认并发档位配置
+    viper.SetDefault("collector.concurrency_profile", "S")
+    viper.SetDefault("collector.concurrency_profiles", map[string]int{
+        "S":  8,  // 2c4g
+        "M":  16, // 4c8g
+        "L":  32, // 8c16g
+        "XL": 64, // 16c32g
+    })
+
+    // 备份服务默认配置
+    viper.SetDefault("backup.storage_backend", "local")
+    // 顶层前缀默认用于在 base_dir 下分组，如 "configs"
+    viper.SetDefault("backup.prefix", "configs")
+    viper.SetDefault("backup.local.base_dir", "./data/backups")
+    // 可选：局部覆盖的前缀，默认空串，最终路径 prefix/local.prefix/save_dir
+    viper.SetDefault("backup.local.prefix", "")
+    viper.SetDefault("backup.local.mkdir_if_missing", true)
+    viper.SetDefault("backup.local.compress", false)
+    // 聚合写入默认开启，聚合文件名默认为 all_cli.txt
+    viper.SetDefault("backup.aggregate.enabled", true)
+    viper.SetDefault("backup.aggregate.filename", "all_cli.txt")
+    // 聚合仅写入模式默认关闭（false 表示仍写入逐命令文件）
+    viper.SetDefault("backup.aggregate.aggregate_only", false)
 }
 
 // Get 获取全局配置

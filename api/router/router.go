@@ -1,18 +1,18 @@
 package router
 
 import (
-	"fmt"
-	"net/http"
-	"time"
+    "fmt"
+    "net/http"
+    "time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/sshcollectorpro/sshcollectorpro/api/handler"
-	"github.com/sshcollectorpro/sshcollectorpro/internal/service"
-	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+    "github.com/gin-gonic/gin"
+    "github.com/sshcollectorpro/sshcollectorpro/api/handler"
+    "github.com/sshcollectorpro/sshcollectorpro/internal/service"
+    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 )
 
 // SetupRouter 设置路由
-func SetupRouter(collectorService *service.CollectorService) *gin.Engine {
+func SetupRouter(collectorService *service.CollectorService, backupService *service.BackupService) *gin.Engine {
 	// 设置Gin模式
 	gin.SetMode(gin.ReleaseMode)
 	
@@ -27,8 +27,9 @@ func SetupRouter(collectorService *service.CollectorService) *gin.Engine {
 	r.Use(LoggingMiddleware())
 	
 	// 创建处理器
-	collectorHandler := handler.NewCollectorHandler(collectorService)
-	deviceHandler := handler.NewDeviceHandler()
+    collectorHandler := handler.NewCollectorHandler(collectorService)
+    deviceHandler := handler.NewDeviceHandler()
+    backupHandler := handler.NewBackupHandler(backupService)
 	
 	// 根路径
 	r.GET("/", func(c *gin.Context) {
@@ -57,17 +58,20 @@ func SetupRouter(collectorService *service.CollectorService) *gin.Engine {
 			collector.GET("/stats", collectorHandler.GetStats)
 		}
 		
-		// 设备管理路由
-		devices := v1.Group("/devices")
-		{
-			devices.POST("", deviceHandler.CreateDevice)
-			devices.GET("", deviceHandler.ListDevices)
-			devices.GET("/:id", deviceHandler.GetDevice)
-			devices.PUT("/:id", deviceHandler.UpdateDevice)
-			devices.DELETE("/:id", deviceHandler.DeleteDevice)
-			devices.POST("/:id/test", deviceHandler.TestConnection)
-		}
-	}
+        // 设备管理路由
+        devices := v1.Group("/devices")
+        {
+            devices.POST("", deviceHandler.CreateDevice)
+            devices.GET("", deviceHandler.ListDevices)
+            devices.GET("/:id", deviceHandler.GetDevice)
+            devices.PUT("/:id", deviceHandler.UpdateDevice)
+            devices.DELETE("/:id", deviceHandler.DeleteDevice)
+            devices.POST("/:id/test", deviceHandler.TestConnection)
+        }
+
+        // 备份路由
+        v1.POST("/backup/batch", backupHandler.BatchBackup)
+    }
 	
 	// 404处理
 	r.NoRoute(func(c *gin.Context) {

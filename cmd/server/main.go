@@ -56,16 +56,23 @@ func main() {
 
     // 已移除 Redis 依赖，直接运行
 
-	// 创建采集器服务
-	collectorService := service.NewCollectorService(cfg)
-	ctx := context.Background()
-	if err := collectorService.Start(ctx); err != nil {
-		logger.Fatal("Failed to start collector service", "error", err)
-	}
-	defer collectorService.Stop()
+    // 创建采集器服务
+    collectorService := service.NewCollectorService(cfg)
+    ctx := context.Background()
+    if err := collectorService.Start(ctx); err != nil {
+        logger.Fatal("Failed to start collector service", "error", err)
+    }
+    defer collectorService.Stop()
 
-	// 设置路由
-	r := router.SetupRouter(collectorService)
+    // 创建备份服务
+    backupService := service.NewBackupService(cfg)
+    if err := backupService.Start(ctx); err != nil {
+        logger.Fatal("Failed to start backup service", "error", err)
+    }
+    defer backupService.Stop()
+
+    // 设置路由
+    r := router.SetupRouter(collectorService, backupService)
 
 	// 创建HTTP服务器
 	server := &http.Server{

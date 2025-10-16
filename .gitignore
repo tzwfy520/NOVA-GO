@@ -68,3 +68,6 @@ coverage.html
 
 # Deploy
 deploy/
+
+# Data
+data/
