@@ -1,0 +1,93 @@
+{
+  "code": "SUCCESS",
+  "message": "自定义批量任务执行完成",
+  "data": [
+    {
+      "device_ip": "115.190.80.219",
+      "port": 22,
+      "device_name": "huoshan-1",
+      "device_platform": "linux",
+      "task_id": "T-2001-1",
+      "success": true,
+      "results": [
+        {
+          "command": "cat /root/mascot/README.md",
+          "raw_output": "# MultiProtGather - 多协议数据采集系统\n\n## 项目简介\n\nMultiProtGather 是一个基于 Django + React 的多协议数据采集系统，支持通过 SSH、Telnet、SNMP 等协议从网络设备采集数据，并提供数据分析和可视化功能。\n\n## 功能特性\n\n- 🌐 **多协议支持**: SSH、Telnet、SNMP 协议数据采集\n- 📊 **数据分析**: 采集数据的统计分析和可视化\n- 🎯 **任务管理**: 灵活的采集任务调度和管理\n- 📱 **现代化UI**: 基于 Ant Design 的响应式前端界面\n- 🔄 **异步处理**: Celery 异步任务队列支持\n- 🐳 **容器化部署**: Docker 和 Docker Compose 一键部署\n- 📈 **实时监控**: 任务执行状态实时监控\n\n## 技术栈\n\n### 后端\n- **框架**: Django 4.x + Django REST Framework\n- **数据库**: PostgreSQL\n- **缓存**: Redis\n- **任务队列**: Celery + Redis\n- **API文档**: drf-spectacular (OpenAPI 3.0)\n\n### 前端\n- **框架**: React 18 + TypeScript\n- **UI组件**: Ant Design\n- **状态管理**: React Hooks\n- **HTTP客户端**: Axios\n- **构建工具**: Create React App\n\n### 部署\n- **容器化**: Docker + Docker Compose\n- **Web服务器**: Nginx\n- **进程管理**: Supervisor\n\n## 快速开始\n\n### 使用 Docker Compose（推荐）\n\n1. **克隆项目**\n```bash\ngit clone \u003crepository-url\u003e\ncd MultiProtGather\n```\n\n2. **配置环境变量**\n```bash\ncp .env.example .env",
+          "raw_output_lines": [
+            "# MultiProtGather - 多协议数据采集系统",
+            "",
+            "## 项目简介",
+            "",
+            "MultiProtGather 是一个基于 Django + React 的多协议数据采集系统，支持通过 SSH、Telnet、SNMP 等协议从网络设备采集数据，并提供数据分析和可视化功能。",
+            "",
+            "## 功能特性",
+            "",
+            "- 🌐 **多协议支持**: SSH、Telnet、SNMP 协议数据采集",
+            "- 📊 **数据分析**: 采集数据的统计分析和可视化",
+            "- 🎯 **任务管理**: 灵活的采集任务调度和管理",
+            "- 📱 **现代化UI**: 基于 Ant Design 的响应式前端界面",
+            "- 🔄 **异步处理**: Celery 异步任务队列支持",
+            "- 🐳 **容器化部署**: Docker 和 Docker Compose 一键部署",
+            "- 📈 **实时监控**: 任务执行状态实时监控",
+            "",
+            "## 技术栈",
+            "",
+            "### 后端",
+            "- **框架**: Django 4.x + Django REST Framework",
+            "- **数据库**: PostgreSQL",
+            "- **缓存**: Redis",
+            "- **任务队列**: Celery + Redis",
+            "- **API文档**: drf-spectacular (OpenAPI 3.0)",
+            "",
+            "### 前端",
+            "- **框架**: React 18 + TypeScript",
+            "- **UI组件**: Ant Design",
+            "- **状态管理**: React Hooks",
+            "- **HTTP客户端**: Axios",
+            "- **构建工具**: Create React App",
+            "",
+            "### 部署",
+            "- **容器化**: Docker + Docker Compose",
+            "- **Web服务器**: Nginx",
+            "- **进程管理**: Supervisor",
+            "",
+            "## 快速开始",
+            "",
+            "### 使用 Docker Compose（推荐）",
+            "",
+            "1. **克隆项目**",
+            "```bash",
+            "git clone \u003crepository-url\u003e",
+            "cd MultiProtGather",
+            "```",
+            "",
+            "2. **配置环境变量**",
+            "```bash",
+            "cp .env.example .env"
+          ],
+          "format_output": [],
+          "error": "",
+          "exit_code": 0,
+          "duration_ms": 354
+        },
+        {
+          "command": "uname -a",
+          "raw_output": "Linux iv-ye38g48em8xjd1vzgucu 5.15.0-91-generic #101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023 x86_64 x86_64 x86_64 GNU/Linux\n",
+          "raw_output_lines": [
+            "Linux iv-ye38g48em8xjd1vzgucu 5.15.0-91-generic #101-Ubuntu SMP Tue Nov 14 13:30:08 UTC 2023 x86_64 x86_64 x86_64 GNU/Li",
+            "nux",
+            ""
+          ],
+          "format_output": [],
+          "error": "",
+          "exit_code": 0,
+          "duration_ms": 349
+        }
+      ],
+      "error": "",
+      "duration_ms": 16860,
+      "timestamp": "2025-10-16T11:16:25.251274+08:00"
+    }
+  ],
+  "total": 1
+}

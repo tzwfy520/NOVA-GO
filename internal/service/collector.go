@@ -9,6 +9,7 @@ import (
     "time"
 
     "github.com/google/uuid"
+    "gorm.io/gorm"
     "gorm.io/gorm/clause"
 
     "github.com/sshcollectorpro/sshcollectorpro/internal/config"
@@ -532,6 +533,9 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
                 dd, ok = s.config.Collector.DeviceDefaults["h3c"]
             } else if strings.HasPrefix(platform, "cisco") {
                 dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+            } else if strings.HasPrefix(platform, "linux") {
+                // 兼容 Linux 家族平台（例如 linux_ubuntu / linux_debian）
+                dd, ok = s.config.Collector.DeviceDefaults["linux"]
             }
         }
         if ok && dd.EnableRequired {
@@ -616,13 +620,71 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
     if err != nil {
         // 交互式失败：先重置连接，再进行非交互回退，避免复用异常连接导致 "disconnect message type 97"
         _ = s.sshPool.CloseConnection(connInfo)
-        // 尝试重新获取新连接（使用同一上下文预算）
-        client, _ = s.sshPool.GetConnection(ctx, connInfo)
+        // 使用连接级独立超时上下文进行重连，避免复用已到期的任务上下文
+        reconnCtx, cancel := context.WithTimeout(context.Background(), s.config.SSH.Timeout)
+        defer cancel()
+        client, err2 := s.sshPool.GetConnection(reconnCtx, connInfo)
+        if err2 != nil || client == nil {
+            s.logTaskError(request.TaskID, fmt.Sprintf("fallback reconnect failed: %v", err2))
+            // 保留原始交互错误，避免误判
+            return nil, err
+        }
 
+        // 针对 Linux 平台的回退增强：当需要提权且交互失败时，使用 sudo -S 为每条命令单独提权
+        // 注意：此路径仅用于回退，优先级低于交互式提权；避免在输出中泄露密码
         tmp := make([]*ssh.CommandResult, 0, len(commands))
         successAny := false
-        for _, cmd := range commands {
-            res, e := client.ExecuteCommand(ctx, cmd)
+        // 解析平台默认以判断是否需要回退提权
+        platform := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
+        dd, ok := s.config.Collector.DeviceDefaults[platform]
+        if !ok {
+            if strings.HasPrefix(platform, "huawei") {
+                dd, ok = s.config.Collector.DeviceDefaults["huawei"]
+            } else if strings.HasPrefix(platform, "h3c") {
+                dd, ok = s.config.Collector.DeviceDefaults["h3c"]
+            } else if strings.HasPrefix(platform, "cisco") {
+                dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+            } else if strings.HasPrefix(platform, "linux") {
+                dd, ok = s.config.Collector.DeviceDefaults["linux"]
+            }
+        }
+        // 组装回退命令列表：若为 Linux 且需要提权，则对每条用户命令进行 sudo 包裹
+        fallbackCmds := make([]string, 0, len(commands))
+        if ok && dd.EnableRequired && strings.HasPrefix(platform, "linux") {
+            // 选择用于 sudo 的密码：优先 enable_password，其次登录密码
+            sudoPwd := strings.TrimSpace(request.EnablePassword)
+            if sudoPwd == "" {
+                sudoPwd = strings.TrimSpace(request.Password)
+            }
+            // 构造通用 sudo 模式：通过管道传递密码，抑制提示
+            // 说明：为避免在输出中暴露密码，不将管道命令的原始输出回显到结果中
+            // 此处仍使用 ExecuteCommand 执行组合命令，设备端不会回显密码本身
+            enableCmd := strings.TrimSpace(dd.EnableCLI)
+            if enableCmd == "" {
+                enableCmd = "enable"
+            }
+            for _, c := range commands {
+                // 跳过内部的提权预命令（例如 sudo -i 或 enable）
+                if strings.EqualFold(strings.TrimSpace(c), enableCmd) {
+                    continue
+                }
+                // 对每条命令应用 sudo -S 提权；-p "" 取消提示，避免阻塞
+                // 使用单引号包裹密码以降低特殊字符影响（不处理嵌套单引号场景）
+                wrapped := c
+                if sudoPwd != "" {
+                    wrapped = fmt.Sprintf("echo '%s' | sudo -S -p '' %s", sudoPwd, c)
+                } else {
+                    wrapped = fmt.Sprintf("sudo %s", c)
+                }
+                fallbackCmds = append(fallbackCmds, wrapped)
+            }
+        } else {
+            // 非 Linux 或无需提权：原样执行
+            fallbackCmds = append(fallbackCmds, commands...)
+        }
+        // 执行回退命令
+        for _, cmd := range fallbackCmds {
+            res, e := client.ExecuteCommand(reconnCtx, cmd)
             if e != nil {
                 s.logTaskError(request.TaskID, fmt.Sprintf("fallback exec failed for '%s': %v", cmd, e))
             } else if res != nil {
@@ -641,39 +703,45 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
         }
     }
 
-	// Cisco 平台：在内部命令过滤前检查 enable 结果，若未进入 '#' 模式则记录错误，并在后续结果中进行提示传播
-    enableFailedMsg := ""
-    {
-        dd, ok := s.config.Collector.DeviceDefaults[platform]
-        if !ok {
-            if strings.HasPrefix(platform, "huawei") {
-                dd, ok = s.config.Collector.DeviceDefaults["huawei"]
-            } else if strings.HasPrefix(platform, "h3c") {
-                dd, ok = s.config.Collector.DeviceDefaults["h3c"]
-            } else if strings.HasPrefix(platform, "cisco") {
-                dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
-            }
-        }
-        enableCmd := strings.TrimSpace(dd.EnableCLI)
-        if enableCmd == "" {
-            enableCmd = "enable"
-        }
-        for _, r := range rawResults {
-            if r == nil {
-                continue
-            }
-            if strings.EqualFold(strings.TrimSpace(r.Command), enableCmd) {
-                if r.ExitCode != 0 || strings.TrimSpace(r.Error) != "" {
-                    enableFailedMsg = strings.TrimSpace(r.Error)
-                    if enableFailedMsg == "" {
-                        enableFailedMsg = "enable did not reach privileged prompt (#); still in user mode"
-                    }
-                    s.logTaskError(request.TaskID, fmt.Sprintf("Enable mode not entered: %s", enableFailedMsg))
-                }
-                break
-            }
-        }
-    }
+	// 在内部命令过滤前检查 enable 结果：若未进入 '#' 模式则记录错误
+	enableFailedMsg := ""
+	enableShouldPropagate := false
+	{
+		dd, ok := s.config.Collector.DeviceDefaults[platform]
+		if !ok {
+			if strings.HasPrefix(platform, "huawei") {
+				dd, ok = s.config.Collector.DeviceDefaults["huawei"]
+			} else if strings.HasPrefix(platform, "h3c") {
+				dd, ok = s.config.Collector.DeviceDefaults["h3c"]
+			} else if strings.HasPrefix(platform, "cisco") {
+				dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+			} else if strings.HasPrefix(platform, "linux") {
+				// 兼容 Linux 家族平台（例如 linux_ubuntu / linux_debian）
+				dd, ok = s.config.Collector.DeviceDefaults["linux"]
+			}
+		}
+		// 记录是否需要对该平台传播 enable 失败提示（例如 Cisco 与 Linux 等需要提权的平台）
+		enableShouldPropagate = ok && dd.EnableRequired
+		enableCmd := strings.TrimSpace(dd.EnableCLI)
+		if enableCmd == "" {
+			enableCmd = "enable"
+		}
+		for _, r := range rawResults {
+			if r == nil {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(r.Command), enableCmd) {
+				if r.ExitCode != 0 || strings.TrimSpace(r.Error) != "" {
+					enableFailedMsg = strings.TrimSpace(r.Error)
+					if enableFailedMsg == "" {
+						enableFailedMsg = "enable did not reach privileged prompt (#); still in user mode"
+					}
+					s.logTaskError(request.TaskID, fmt.Sprintf("Enable mode not entered: %s", enableFailedMsg))
+				}
+				break
+			}
+		}
+	}
 
 	// 记录成功日志
 	s.logTaskInfo(request.TaskID, fmt.Sprintf("SSH collection completed, executed %d commands", len(rawResults)))
@@ -706,6 +774,9 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
                 dd, ok = s.config.Collector.DeviceDefaults["h3c"]
             } else if strings.HasPrefix(platform, "cisco") {
                 dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
+            } else if strings.HasPrefix(platform, "linux") {
+                // 兼容 Linux 家族平台（例如 linux_ubuntu / linux_debian）
+                dd, ok = s.config.Collector.DeviceDefaults["linux"]
             }
         }
         if ok {
@@ -884,8 +955,8 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 			FormatOutput: fmtRows,
 			Error: func() string {
 				if r != nil {
-					// 传播 enable 失败提示到后续命令（仅 Cisco）
-					if strings.HasPrefix(platform, "cisco") && enableFailedMsg != "" {
+					// 传播 enable 失败提示到后续命令（需要提权的平台，例如 Cisco 与 Linux）
+					if enableShouldPropagate && enableFailedMsg != "" {
 						if r.Error != "" {
 							return r.Error
 						}
@@ -1018,15 +1089,17 @@ func (s *CollectorService) cleanupExpiredTasks() {
 
 // saveTask 保存任务到数据库
 func (s *CollectorService) saveTask(task *model.Task) error {
-	db := database.GetDB()
-	// 如果主键已存在则进行更新（upsert），避免重复任务ID导致插入失败
-	return db.Clauses(clause.OnConflict{UpdateAll: true}).Create(task).Error
+    // 如果主键已存在则进行更新（upsert），避免重复任务ID导致插入失败
+    return database.WithRetry(func(db *gorm.DB) error {
+        return db.Clauses(clause.OnConflict{UpdateAll: true}).Create(task).Error
+    }, 5, 50*time.Millisecond)
 }
 
 // updateTask 更新任务状态
 func (s *CollectorService) updateTask(task *model.Task) error {
-	db := database.GetDB()
-	return db.Save(task).Error
+    return database.WithRetry(func(db *gorm.DB) error {
+        return db.Save(task).Error
+    }, 5, 50*time.Millisecond)
 }
 
 // 已移除 Redis 缓存函数
@@ -1051,16 +1124,17 @@ func (s *CollectorService) logTaskWarn(taskID, message string) {
 
 // saveTaskLog 保存任务日志
 func (s *CollectorService) saveTaskLog(taskID, level, message string) {
-	db := database.GetDB()
-	taskLog := &model.TaskLog{
-		ID:        uuid.NewString(),
-		TaskID:    taskID,
-		Level:     level,
-		Message:   message,
-		CreatedAt: time.Now(),
-	}
+    taskLog := &model.TaskLog{
+        ID:        uuid.NewString(),
+        TaskID:    taskID,
+        Level:     level,
+        Message:   message,
+        CreatedAt: time.Now(),
+    }
 
-	if err := db.Create(taskLog).Error; err != nil {
-		logger.Error("Failed to save task log", "task_id", taskID, "error", err)
-	}
+    if err := database.WithRetry(func(db *gorm.DB) error {
+        return db.Create(taskLog).Error
+    }, 5, 50*time.Millisecond); err != nil {
+        logger.Warn("Failed to save task log", "task_id", taskID, "error", err)
+    }
 }

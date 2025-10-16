@@ -271,6 +271,9 @@ func (c *Client) newSessionWithRetry() (*ssh.Session, error) {
 
 // ExecuteCommand 执行单个命令
 func (c *Client) ExecuteCommand(ctx context.Context, command string) (*CommandResult, error) {
+    if c == nil {
+        return nil, fmt.Errorf("SSH client is nil")
+    }
     if c.connection == nil {
         return nil, fmt.Errorf("SSH connection not established")
     }
@@ -332,7 +335,10 @@ func (c *Client) ExecuteCommand(ctx context.Context, command string) (*CommandRe
 
 // ExecuteCommands 批量执行命令
 func (c *Client) ExecuteCommands(ctx context.Context, commands []string) ([]*CommandResult, error) {
-	results := make([]*CommandResult, 0, len(commands))
+    if c == nil {
+        return nil, fmt.Errorf("SSH client is nil")
+    }
+    results := make([]*CommandResult, 0, len(commands))
 
 	for _, command := range commands {
 		select {
@@ -356,9 +362,12 @@ func (c *Client) ExecuteCommands(ctx context.Context, commands []string) ([]*Com
 
 // ExecuteInteractiveCommand 执行交互式命令
 func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, responses []string) (*CommandResult, error) {
-	if c.connection == nil {
-		return nil, fmt.Errorf("SSH connection not established")
-	}
+    if c == nil {
+        return nil, fmt.Errorf("SSH client is nil")
+    }
+    if c.connection == nil {
+        return nil, fmt.Errorf("SSH connection not established")
+    }
 
 	startTime := time.Now()
 	result := &CommandResult{
@@ -479,9 +488,12 @@ func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, 
 // ExecuteInteractiveCommands 在单一交互式会话(PTY Shell)中串行执行多条命令
 // 使用启发式的提示符后缀来分隔每条命令的输出 (例如: '>', '#', ']')
 func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []string, promptSuffixes []string, opts *InteractiveOptions) ([]*CommandResult, error) {
-	if c.connection == nil {
-		return nil, fmt.Errorf("SSH connection not established")
-	}
+    if c == nil {
+        return nil, fmt.Errorf("SSH client is nil")
+    }
+    if c.connection == nil {
+        return nil, fmt.Errorf("SSH connection not established")
+    }
 
 	// 创建会话（带重试）
 	session, err := c.newSessionWithRetry()
@@ -762,8 +774,10 @@ StartCommands:
             return nil, fmt.Errorf("failed to write command: %w", err)
         }
 
-		// 收集输出直到下一个提示符
-		var out strings.Builder
+        // 收集输出直到下一个提示符
+        var out strings.Builder
+        // 记录最近的一行清洗后输出，用于调试回放发送密码时的上下文
+        lastCleanLine := ""
 		sawContent := false
 		// 跳过命令回显（部分设备会回显命令，且可能因换行/分页被拆分）
 		echoRemain := strings.TrimSpace(cmd)
@@ -801,10 +815,12 @@ StartCommands:
                     ExitCode: -1,
                     Duration: time.Since(cmdStart),
                 })
-                return results, nil
-			case line := <-lineCh:
-				// 统一清洗行内容用于比较和提示符检测
-				clean := sanitize(line)
+                // 返回上层错误以触发服务层的非交互回退逻辑，避免只返回预命令导致结果为空
+                return results, ctx.Err()
+            case line := <-lineCh:
+                // 统一清洗行内容用于比较和提示符检测
+                clean := sanitize(line)
+                lastCleanLine = clean
 				// 若出现“提示符+上一条命令”的延迟回显，直接跳过，避免写入当前命令的输出
 				// 例如："hostname#terminal length 0" 在下一条命令开始时到达
 				if opts != nil && opts.SkipDelayedEcho && clean != "" && prevCmd != "" {
@@ -854,9 +870,11 @@ StartCommands:
                     exitCode := 0
                     if isEnableCmd(cmd) {
                         trimmedPrompt := strings.TrimSpace(clean)
+                        logger.Infof("Enable prompt reached; privileged=%v prompt_line=%q", strings.HasSuffix(trimmedPrompt, "#"), trimmedPrompt)
                         if !strings.HasSuffix(trimmedPrompt, "#") {
                             // 未进入特权模式，标记错误但不阻断后续命令
                             errStr = "enable did not reach privileged prompt (#); still in user mode"
+                            logger.Warnf("Enable not privileged; prompt_line=%q", trimmedPrompt)
                             exitCode = -2
                         }
                     }
@@ -886,6 +904,7 @@ StartCommands:
                     exp := strings.TrimSpace(opts.EnableExpectOutput)
                     if exp != "" {
                         if strings.Contains(lower, strings.ToLower(exp)) {
+                            logger.Infof("Enable password prompt matched; expect=%q line=%q cmd=%q", exp, clean, cmd)
                             _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
                             enableFallbackSent = true
                             // 不立即结束，继续等待提示符，以确保进入特权模式
@@ -894,6 +913,7 @@ StartCommands:
                     } else {
                         // 回退启发式：常见密码提示关键词
                         if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "enable secret") || strings.Contains(lower, "密码") {
+                            logger.Infof("Enable password heuristic matched; line=%q cmd=%q", clean, cmd)
                             _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
                             enableFallbackSent = true
                             continue
@@ -918,6 +938,7 @@ StartCommands:
 				// 提示符已在写入前处理
             case <-enableFallback:
                 if !enableFallbackSent {
+                    logger.Warnf("Enable password fallback sending; cmd=%q last_line=%q", cmd, lastCleanLine)
                     _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
                     enableFallbackSent = true
                     // 继续等待提示符
@@ -989,12 +1010,15 @@ func (c *Client) Close() error {
 
 // IsConnected 检查连接状态
 func (c *Client) IsConnected() bool {
-	c.mutex.RLock()
-	conn := c.connection
-	c.mutex.RUnlock()
-	if conn == nil {
-		return false
-	}
+    if c == nil {
+        return false
+    }
+    c.mutex.RLock()
+    conn := c.connection
+    c.mutex.RUnlock()
+    if conn == nil {
+        return false
+    }
 	// 轻量级健康检查：发送 keepalive 请求而不创建会话，避免触发设备的会话数量限制
 	// 若底层连接已断开，SendRequest 会返回错误；否则认为连接仍可用
 	_, _, err := conn.SendRequest("keepalive@openssh.com", false, nil)

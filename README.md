@@ -338,6 +338,24 @@ database:
     conn_max_lifetime: 300 # 连接最大生命周期
 ```
 
+### 并发档位（推荐）
+在 `configs/config.yaml` 中定义并发档位，按宿主机规格选择安全并发。档位优先于数值并发。
+
+```yaml
+collector:
+  concurrency_profile: "S"   # 可选 S/M/L/XL（支持 "Concurrency-S" 等写法）
+  concurrency_profiles:
+    S: 8    # 2c4g
+    M: 16   # 4c8g
+    L: 32   # 8c16g
+    XL: 64  # 16c32g
+  concurrent: 5              # 若未配置档位则使用此数值
+```
+
+说明：
+- 档位应用后会覆盖 `collector.concurrent`，作用于批处理并发与 SSH 连接池。
+- 启动日志会打印当前档位与并发数，便于运维核验。
+
  
 
 ## 🔐 安全配置

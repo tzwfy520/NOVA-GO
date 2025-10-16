@@ -556,3 +556,25 @@ docker restart sshcollector-pro
 ## 联系信息
 
 如有问题，请联系运维团队或查看项目文档。
+### 4. 并发档位（推荐）
+在采集器启动时从配置读取并发档位，根据宿主机规格自动设置安全的并发度。档位优先于 `collector.concurrent` 数值。
+
+```yaml
+# configs/config.yaml
+collector:
+  # 档位：S/M/L/XL（也支持 "Concurrency-S" 形式）
+  concurrency_profile: "S"
+  # 档位与并发数映射（可按需调整）
+  concurrency_profiles:
+    S: 8    # 2c4g
+    M: 16   # 4c8g
+    L: 32   # 8c16g
+    XL: 64  # 16c32g
+  # 兼容老配置：若未设置档位，则使用 numeric 并发数
+  concurrent: 5
+```
+
+说明：
+- 档位会覆盖并发数，统一影响内部 `workers` 队列和 SSH 连接池的 `max_active`。
+- 服务器日志会输出当前应用的档位与并发度，便于运维核验。
+- 如需更保守或更激进的并发，可直接修改 `concurrency_profiles` 对应数值。

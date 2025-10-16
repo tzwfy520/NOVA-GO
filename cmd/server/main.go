@@ -25,21 +25,28 @@ func main() {
 	}
 
 	// 初始化日志
-	if err := logger.Init(logger.Config{
-		Level:      cfg.Log.Level,
-		Format:     cfg.Log.Format,
-		Output:     cfg.Log.Output,
-		FilePath:   cfg.Log.FilePath,
-		MaxSize:    cfg.Log.MaxSize,
-		MaxBackups: cfg.Log.MaxBackups,
-		MaxAge:     cfg.Log.MaxAge,
-		Compress:   cfg.Log.Compress,
-	}); err != nil {
-		fmt.Printf("Failed to initialize logger: %v\n", err)
-		os.Exit(1)
-	}
+    if err := logger.Init(logger.Config{
+        Level:      cfg.Log.Level,
+        Format:     cfg.Log.Format,
+        Output:     cfg.Log.Output,
+        FilePath:   cfg.Log.FilePath,
+        MaxSize:    cfg.Log.MaxSize,
+        MaxBackups: cfg.Log.MaxBackups,
+        MaxAge:     cfg.Log.MaxAge,
+        Compress:   cfg.Log.Compress,
+    }); err != nil {
+        fmt.Printf("Failed to initialize logger: %v\n", err)
+        os.Exit(1)
+    }
 
-	logger.Info("Starting SSH Collector Pro Server", "version", "1.0.0")
+    logger.Info("Starting SSH Collector Pro Server", "version", "1.0.0")
+
+    // 打印并发档位应用情况
+    if cfg.Collector.ConcurrencyProfile != "" {
+        logger.Info("Concurrency profile applied", "profile", cfg.Collector.ConcurrencyProfile, "workers", cfg.Collector.Concurrent)
+    } else {
+        logger.Info("Concurrency set by numeric value", "workers", cfg.Collector.Concurrent)
+    }
 
 	// 初始化数据库
 	if err := database.InitSQLite(cfg.Database.SQLite); err != nil {

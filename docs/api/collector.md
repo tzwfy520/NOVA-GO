@@ -13,6 +13,7 @@
 - `user_name`：登录用户名，必填。
 - `password`：登录密码，必填。
 - `enable_password`：特权/enable 密码，选填。
+  - 用途：当平台需要进入特权模式时使用（如 Cisco 的 `enable`）。未提供或平台不需要特权时忽略。
 - `cli_list`：命令列表，可为空/一个/多个命令。
   - 自定义批量接口：为空时不会执行任何命令，返回空结果。
   - 系统批量接口：为空时不会执行任何命令，返回空结果。
@@ -108,6 +109,7 @@
       "collect_protocol": "ssh",
       "user_name": "ops",
       "password": "xxxx",
+      "enable_password": "xxxx",
       "port": 22
     },
     {
@@ -183,6 +185,7 @@
       "collect_protocol": "ssh",
       "user_name": "admin",
       "password": "123456",
+      "enable_password": "123456",
       "cli_list": ["display version", "display current-configuration"]
     },
     {
@@ -192,6 +195,7 @@
       "collect_protocol": "ssh",
       "user_name": "ops",
       "password": "abcd",
+      "enable_password": "abcd",
       "cli_list": ["show version", "show running-config"]
     }
   ]
@@ -235,5 +239,14 @@
 
 > 说明：`collect_origin` 不再作为批量接口入参传递，由接口路径隐式决定（`/batch/custom` → `customer`，`/batch/system` → `system`）。系统批量接口要求 `device_platform` 必填，且仅执行设备条目中的 `cli_list`；不再注入平台默认命令。
 
+> 使用提示：两类批量接口均支持 `enable_password`，当目标平台需要进入特权模式时将自动尝试（例如执行 `enable` 并输入口令）。若平台不需要或用户已具备特权，提供该字段不会影响结果。
+
 ### 兼容性
 - 原单设备接口已移除；通用批量接口（`POST /api/v1/collector/batch`）保留，建议迁移到拆分后的批量接口以获得更清晰的语义。
+
+---
+
+## 平台扩展说明（高级）
+- 系统允许在配置中扩展新的 `device_platform`，接口不限制具体取值；未内置的平台将使用通用交互默认。
+- 建议在配置文件中为新平台设置：提示符后缀（`prompt_suffixes`）、分页关闭命令（`disable_paging_cmds`）、是否需要特权（`enable_required`）、特权进入命令（`enable_cli`）、以及分页/提示的自动交互（`auto_interactions`）。
+- 如需扩展，请参考 `configs/config.yaml` 的 `collector.device_defaults` 与 `collector.interact.auto_interactions` 配置段示例。
