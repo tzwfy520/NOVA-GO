@@ -800,6 +800,7 @@ StartCommands:
 
         // 收集输出直到下一个提示符
         var out strings.Builder
+        outLineCount := 0
         // 记录最近的一行清洗后输出，用于调试回放发送密码时的上下文
         lastCleanLine := ""
 		sawContent := false
@@ -833,6 +834,12 @@ StartCommands:
         if opts != nil && opts.EnablePassword != "" && isEnableCmd(cmd) {
             enableFallback = time.After(1500 * time.Millisecond)
         }
+        // 针对长输出命令（如 Cisco "show running-config"），禁用静默完成以避免只收首行
+        isLongOutputCmd := func(curr string) bool {
+            c := strings.ToLower(strings.TrimSpace(curr))
+            return strings.HasPrefix(c, "show run") || strings.HasPrefix(c, "show running-config")
+        }
+        quietCompleteAllowed := !isLongOutputCmd(cmd)
         for {
             select {
             case <-ctx.Done():
@@ -923,6 +930,7 @@ StartCommands:
                 // 写入正常内容
                 out.WriteString(clean)
                 out.WriteString("\n")
+                outLineCount++
                 if strings.TrimSpace(clean) != "" {
                     sawContent = true
                 }
@@ -931,30 +939,42 @@ StartCommands:
 				// 扩展识别范围："Password:", "Enter password:", "Password required", "Secret:", "enable secret", 中文"密码"
 				trimmed := clean
 				lower := strings.ToLower(trimmed)
-                if opts != nil && opts.EnablePassword != "" && isEnableCmd(cmd) {
-                    // 优先根据配置的 EnableExpectOutput 进行匹配（大小写不敏感，包含匹配）
-                    exp := strings.TrimSpace(opts.EnableExpectOutput)
-                    if exp != "" {
-                        if strings.Contains(lower, strings.ToLower(exp)) {
-                            logger.Infof("Enable password prompt matched; expect=%q line=%q cmd=%q", exp, clean, cmd)
-    stdin.Write([]byte(opts.EnablePassword + "\r\n"))
-                            enableFallbackSent = true
-                            // 不立即结束，继续等待提示符，以确保进入特权模式
-                            continue
-                        }
-                    } else {
-                        // 回退启发式：常见密码提示关键词
-                        if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "enable secret") || strings.Contains(lower, "密码") {
-                            logger.Infof("Enable password heuristic matched; line=%q cmd=%q", clean, cmd)
-    stdin.Write([]byte(opts.EnablePassword + "\r\n"))
-                            enableFallbackSent = true
-                            continue
-                        }
+                // 在提权命令或其后续紧邻命令（前一条为 enable）中识别密码提示
+            prevIsEnable := false
+            if opts != nil {
+                ecli := strings.TrimSpace(opts.EnableCLI)
+                if ecli == "" { ecli = "enable" }
+                prevIsEnable = strings.EqualFold(strings.TrimSpace(prevCmd), ecli)
+            }
+            if opts != nil && opts.EnablePassword != "" && (isEnableCmd(cmd) || prevIsEnable) {
+                // 优先根据配置的 EnableExpectOutput 进行匹配（大小写不敏感，包含匹配）
+                exp := strings.TrimSpace(opts.EnableExpectOutput)
+                if exp != "" {
+                    if strings.Contains(lower, strings.ToLower(exp)) {
+                        logger.Infof("Enable password prompt matched; expect=%q line=%q cmd=%q (prev_is_enable=%v)", exp, clean, cmd, prevIsEnable)
+                        stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+                        enableFallbackSent = true
+                        // 不立即结束，继续等待提示符，以确保进入特权模式
+                        continue
+                    }
+                } else {
+                    // 回退启发式：常见密码提示关键词
+                    if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "enable secret") || strings.Contains(lower, "密码") {
+                        logger.Infof("Enable password heuristic matched; line=%q cmd=%q (prev_is_enable=%v)", clean, cmd, prevIsEnable)
+                        stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+                        enableFallbackSent = true
+                        continue
                     }
                 }
-                // 处理 sudo 拒绝密码的情况：出现 "Sorry, try again." 或认证失败时，尝试用登录密码回退一次
-                if opts != nil && isEnableCmd(cmd) {
-                    if strings.Contains(lower, "sorry, try again") || strings.Contains(lower, "authentication failure") {
+            }
+                // 处理提权密码被拒绝的情况（包括 Cisco "Bad secrets"）：出现相关提示时，尝试用登录密码回退一次
+            if opts != nil {
+                // 再次判断当前命令是否为 enable 或者前一条命令为 enable（提示可能延迟到下一条命令周期）
+                ecli := strings.TrimSpace(opts.EnableCLI)
+                if ecli == "" { ecli = "enable" }
+                prevIsEnable := strings.EqualFold(strings.TrimSpace(prevCmd), ecli)
+                if isEnableCmd(cmd) || prevIsEnable {
+                    if strings.Contains(lower, "sorry, try again") || strings.Contains(lower, "authentication failure") || strings.Contains(lower, "bad secrets") || strings.Contains(lower, "bad secret") {
                         logger.Warnf("Enable password rejected; will attempt login password once; line=%q cmd=%q", clean, cmd)
                         if !sorryRetryDone {
                             lp := strings.TrimSpace(opts.LoginPassword)
@@ -968,6 +988,7 @@ StartCommands:
                         }
                     }
                 }
+            }
 
 				// 自动交互：匹配提示后自动发送响应（如 more/confirm），仅命中一次
 				if opts != nil && len(opts.AutoInteractions) > 0 && !autoInteractDone {
@@ -996,6 +1017,15 @@ StartCommands:
             // 该逻辑可以避免因提示符识别失败导致的“总是等到整体超时”问题
             case <-time.After(250 * time.Millisecond):
                 if sawContent && time.Since(lastRecvAt) >= quietAfter {
+                    // 针对长输出命令，禁止静默完成，避免在首行后短暂空档提前结束
+                    if !quietCompleteAllowed {
+                        continue
+                    }
+                    // 防止过早结束：若仅看到极少输出（如 Cisco "Building configuration..."），在命令启动后的前2秒内不触发静默完成
+                    // 若输出行数已达到一定规模（>=3），则不受该限制
+                    if time.Since(cmdStart) < 2*time.Second && outLineCount < 3 {
+                        continue
+                    }
                     results = append(results, &CommandResult{
                         Command:  cmd,
                         Output:   util.EnsureUTF8(out.String()),

@@ -333,10 +333,18 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 					continue
 				}
 				if r.ExitCode != 0 || strings.TrimSpace(r.Error) != "" {
-					failedCmds = append(failedCmds, safeDisplayCmd(dev.CliList, i))
+					name := safeDisplayCmd(dev.CliList, i)
+					if strings.TrimSpace(name) == "" {
+						name = strings.TrimSpace(r.Command)
+					}
+					failedCmds = append(failedCmds, name)
 				}
 				// 原始数据对象路径：/{minio_prefix}/{save_dir}/{task_id}/raw/{batch_id}/{device_name}/formatted/{cli_name}.txt
-				cli := strings.ToLower(strings.TrimSpace(safeDisplayCmd(dev.CliList, i)))
+				disp := strings.TrimSpace(safeDisplayCmd(dev.CliList, i))
+				if disp == "" {
+					disp = strings.TrimSpace(r.Command)
+				}
+				cli := strings.ToLower(disp)
 				obj := s.buildRawObjectPath(req.SaveDir, req.TaskID, req.TaskBatch, dev.DeviceName, cli)
 				if obj != "" {
 					if _, werr := s.minioWriter.PutObject(ctx, obj, []byte(r.Output), "text/plain; charset=utf-8"); werr != nil {
@@ -362,17 +370,29 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 				if r == nil {
 					continue
 				}
-				cli := strings.ToLower(strings.TrimSpace(safeDisplayCmd(dev.CliList, i)))
+				disp := strings.TrimSpace(safeDisplayCmd(dev.CliList, i))
+				if disp == "" {
+					disp = strings.TrimSpace(r.Command)
+				}
+				cli := strings.ToLower(disp)
 				// 模板列表
 				tvals := tmpl[p][cli]
 				formatted, ferr := s.applyFSM(tvals, r.Output)
 				if ferr != nil {
 					// 区分未匹配模板与解析失败
 					if len(tvals) == 0 || strings.Contains(strings.ToLower(ferr.Error()), "no matched fsm template") {
-						notfoundCmds = append(notfoundCmds, safeDisplayCmd(dev.CliList, i))
+						name := safeDisplayCmd(dev.CliList, i)
+						if strings.TrimSpace(name) == "" {
+							name = strings.TrimSpace(r.Command)
+						}
+						notfoundCmds = append(notfoundCmds, name)
 						formatted = map[string]interface{}{"parsed": []interface{}{}}
 					} else {
-						parseFailedCmds = append(parseFailedCmds, safeDisplayCmd(dev.CliList, i))
+						name := safeDisplayCmd(dev.CliList, i)
+						if strings.TrimSpace(name) == "" {
+							name = strings.TrimSpace(r.Command)
+						}
+						parseFailedCmds = append(parseFailedCmds, name)
 						formatted = map[string]interface{}{"parsed": []interface{}{}}
 					}
 				}
@@ -540,6 +560,8 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 	// 原始采集信息
 	rawViews := make([]CommandResultView, 0, len(filtered))
 	nonEmptyRaw := 0
+
+	// 原始采集信息
 	for i, r := range filtered {
 		if r == nil {
 			continue
@@ -547,8 +569,12 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 		if strings.TrimSpace(r.Output) != "" {
 			nonEmptyRaw++
 		}
+		name := safeDisplayCmd(userCmds, i)
+		if strings.TrimSpace(name) == "" {
+			name = strings.TrimSpace(r.Command)
+		}
 		rawViews = append(rawViews, CommandResultView{
-			Command:      safeDisplayCmd(userCmds, i),
+			Command:      name,
 			RawOutput:    r.Output,
 			FormatOutput: nil,
 			Error:        r.Error,
@@ -567,8 +593,6 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 		resp.Formatted = map[string]interface{}{}
 		return resp, nil
 	}
-
-	// 应用 FSM
 	p := strings.ToLower(strings.TrimSpace(dev.DevicePlatform))
 	formatted := make(map[string]interface{})
 	emptyCount := 0
@@ -576,7 +600,11 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 		if r == nil {
 			continue
 		}
-		cli := strings.ToLower(strings.TrimSpace(safeDisplayCmd(userCmds, i)))
+		disp := strings.TrimSpace(safeDisplayCmd(userCmds, i))
+		if disp == "" {
+			disp = strings.TrimSpace(r.Command)
+		}
+		cli := strings.ToLower(disp)
 		tvals := tmpl[p][cli]
 		f, ferr := s.applyFSM(tvals, r.Output)
 		if ferr != nil {
