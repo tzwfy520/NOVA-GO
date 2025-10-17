@@ -82,8 +82,15 @@ func main() {
     }
     defer formatService.Stop()
 
+    // 创建部署服务（注入 CollectorService 以便编排前后采集）
+    deployService := service.NewDeployService(cfg, collectorService)
+    if err := deployService.Start(ctx); err != nil {
+        logger.Fatal("Failed to start deploy service", "error", err)
+    }
+    defer deployService.Stop()
+
     // 设置路由
-    r := router.SetupRouter(collectorService, backupService, formatService)
+    r := router.SetupRouter(collectorService, backupService, formatService, deployService)
 
 	// 创建HTTP服务器
 	server := &http.Server{

@@ -626,7 +626,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 					acc.WriteString(lines[len(lines)-1])
 				}
 				for i := 0; i < len(lines)-1; i++ {
-					line := strings.TrimSpace(lines[i])
+					line := lines[i]
 					// 阻塞推送，避免丢失关键信息（例如提示符）
 					lineCh <- line
 				}
@@ -655,7 +655,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 					acc.WriteString(lines[len(lines)-1])
 				}
 				for i := 0; i < len(lines)-1; i++ {
-					line := strings.TrimSpace(lines[i])
+					line := lines[i]
 					lineCh <- line
 				}
 			}
@@ -691,7 +691,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
             }
             b.WriteRune(r)
         }
-        return strings.TrimSpace(b.String())
+        return b.String()
     }
 
 	// 捕获首个提示符的主机名前缀，用于后续更稳健的提示符判断
@@ -699,7 +699,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 
 	// 辅助函数：判断行是否是提示符（先清洗再匹配后缀；若已捕获前缀，则要求包含前缀）
 	isPrompt := func(line string) bool {
-		trimmed := sanitize(line)
+		trimmed := strings.TrimSpace(sanitize(line))
 		if trimmed == "" {
 			return false
 		}
@@ -733,7 +733,8 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 			}
 		}
 		if last >= 0 && last+1 < len(s) {
-			return strings.TrimSpace(s[last+1:])
+			// 仅去除行尾空格和制表符，保留前导空格以确保错误标记位对齐
+			return strings.TrimRightFunc(s[last+1:], func(r rune) bool { return r == ' ' || r == '\t' })
 		}
 		return s
 	}
@@ -748,17 +749,17 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 			return nil, ctx.Err()
 		case line := <-lineCh:
 			if isPrompt(line) {
-				// 记录首个提示符的前缀（去掉匹配到的后缀）
-				trimmed := sanitize(line)
-				for _, suf := range promptSuffixes {
-					if strings.HasSuffix(trimmed, suf) {
-						prefix := strings.TrimSpace(trimmed[:len(trimmed)-len(suf)])
-						if prefix != "" {
-							promptPrefix = prefix
+					// 记录首个提示符的前缀（去掉匹配到的后缀）
+					trimmed := strings.TrimSpace(sanitize(line))
+					for _, suf := range promptSuffixes {
+						if strings.HasSuffix(trimmed, suf) {
+							prefix := strings.TrimSpace(trimmed[:len(trimmed)-len(suf)])
+							if prefix != "" {
+								promptPrefix = prefix
+							}
+							break
 						}
-						break
 					}
-				}
 				goto Ready
 			}
 		case <-time.After(3 * time.Second):

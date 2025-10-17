@@ -20,6 +20,7 @@ type Config struct {
     Log       LogConfig       `mapstructure:"log"`
     Backup    BackupConfig    `mapstructure:"backup"`
     DataFormat DataFormatConfig `mapstructure:"data_format"`
+    Deploy    DeployConfig      `mapstructure:"deploy"`
 }
 
 // ServerConfig 服务器配置
@@ -83,6 +84,12 @@ type StorageConfig struct {
 type DataFormatConfig struct {
     // MinioPrefix 用于格式化数据在 MinIO 中的顶层路径（不含 bucket）
     MinioPrefix string `mapstructure:"minio_prefix"`
+}
+
+// DeployConfig 部署相关配置
+type DeployConfig struct {
+    // 部署相关等待时间（毫秒），用于控制前后采集等待与下发后等待
+    DeployWaitMS int `mapstructure:"deploy_wait_ms"`
 }
 
 // BackupConfig 备份服务配置
@@ -194,6 +201,14 @@ func Load(configPath string) (*Config, error) {
         }
     }
 
+    // 兼容旧顶层键：deploy_wait_ms -> deploy.deploy_wait_ms
+    if config.Deploy.DeployWaitMS <= 0 {
+        if viper.IsSet("deploy_wait_ms") {
+            val := viper.GetInt("deploy_wait_ms")
+            if val > 0 { config.Deploy.DeployWaitMS = val }
+        }
+    }
+
 	// 环境变量替换
 	config = replaceEnvVars(config)
 
@@ -204,7 +219,6 @@ func Load(configPath string) (*Config, error) {
 	return &config, nil
 }
 
-// setDefaults 设置默认配置值
 func setDefaults() {
 	// 默认输出过滤规则：大小写不敏感，去除首尾空格
 	viper.SetDefault("collector.output_filter.case_insensitive", true)
@@ -258,6 +272,8 @@ func setDefaults() {
 
     // SSH 连接默认超时（拨号/握手阶段），避免长时间阻塞
     viper.SetDefault("ssh.connect_timeout", 10*time.Second)
+
+    // 移除误插入的 DeployConfig（已在文件顶层定义）
 }
 
 // Get 获取全局配置
@@ -318,53 +334,41 @@ func applyConcurrencyProfile(cfg *Config) {
                     var cp ConcurrencyProfileConfig
                     if c, ok := vv["concurrent"]; ok {
                         switch cv := c.(type) {
-                        case int:
-                            cp.Concurrent = cv
-                        case int64:
-                            cp.Concurrent = int(cv)
-                        case float64:
-                            cp.Concurrent = int(cv)
-                        case string:
-                            if n, err := strconv.Atoi(cv); err == nil { cp.Concurrent = n }
+                            case int:
+                                cp.Concurrent = cv
+                            case int64:
+                                cp.Concurrent = int(cv)
+                            case float64:
+                                cp.Concurrent = int(cv)
+                            case string:
+                                if n, err := strconv.Atoi(cv); err == nil {
+                                    cp.Concurrent = n
+                                }
                         }
                     }
                     if t, ok := vv["threads"]; ok {
                         switch tv := t.(type) {
-                        case int:
-                            cp.Threads = tv
-                        case int64:
-                            cp.Threads = int(tv)
-                        case float64:
-                            cp.Threads = int(tv)
-                        case string:
-                            if n, err := strconv.Atoi(tv); err == nil { cp.Threads = n }
+                            case int:
+                                cp.Threads = tv
+                            case int64:
+                                cp.Threads = int(tv)
+                            case float64:
+                                cp.Threads = int(tv)
+                            case string:
+                                if n, err := strconv.Atoi(tv); err == nil {
+                                    cp.Threads = n
+                                }
                         }
                     }
                     mapping[key] = cp
                 }
             }
-        case map[string]map[string]int:
-            for k, v := range rm {
-                key := strings.ToUpper(k)
-                cp := ConcurrencyProfileConfig{Concurrent: v["concurrent"], Threads: v["threads"]}
-                mapping[key] = cp
-            }
-        case map[string]int:
-            for k, v := range rm {
-                mapping[strings.ToUpper(k)] = ConcurrencyProfileConfig{Concurrent: v}
-            }
         }
-        cfg.Collector.ConcurrencyProfiles = mapping
     }
 
-    // 应用档位到 Collector.Concurrent/Threads
     if profCfg, ok := mapping[p]; ok {
-        if profCfg.Concurrent > 0 {
-            cfg.Collector.Concurrent = profCfg.Concurrent
-        }
-        if profCfg.Threads > 0 {
-            cfg.Collector.Threads = profCfg.Threads
-        }
+        if profCfg.Concurrent > 0 { cfg.Collector.Concurrent = profCfg.Concurrent }
+        if profCfg.Threads > 0 { cfg.Collector.Threads = profCfg.Threads }
     }
 }
 
@@ -373,37 +377,37 @@ func (c *Config) GetServerAddr() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 }
 
-// OutputFilterConfig 定义原始输出的行过滤规则
+// OutputFilterConfig 输出过滤器配置
 type OutputFilterConfig struct {
-	// Prefixes 前缀匹配：如果行（可选 trim/casefold 后）以这些前缀之一开始，则移除
+	// Prefixes: 移除以这些字符串开头的行（例如分页提示 "---- More ----" 或纯 more 行）
 	Prefixes []string `mapstructure:"prefixes"`
-	// Contains 包含匹配：如果行（可选 trim/casefold 后）包含这些子串之一，则移除
+	// Contains: 移除包含这些子串的行（例如 Cisco 的 "--more--"）
 	Contains []string `mapstructure:"contains"`
-	// CaseInsensitive 是否大小写不敏感匹配（默认 true）
+	// CaseInsensitive: 忽略大小写匹配（默认启用）
 	CaseInsensitive bool `mapstructure:"case_insensitive"`
-	// TrimSpace 是否在匹配前对行做 TrimSpace（默认 true）
+	// TrimSpace: 过滤后再移除首尾空格（默认启用）
 	TrimSpace bool `mapstructure:"trim_space"`
 }
 
-// InteractConfig 交互式会话的配置：自动交互与错误提示
+// InteractConfig 交互配置（针对设备交互行为的过滤与提示匹配）
 type InteractConfig struct {
-	// AutoInteractions 当输出包含 expect_output（大小写可不敏感）时自动发送 auto_send
+	// AutoInteractions: 自动交互配置（遇到输出提示时自动发送命令）
 	AutoInteractions []AutoInteractionConfig `mapstructure:"auto_interactions"`
-	// ErrorHints 错误提示前缀列表（匹配到则认为命令可能错误）
+	// ErrorHints: 错误提示前缀（命令错误或无效提示）
 	ErrorHints []string `mapstructure:"error_hints"`
-	// CaseInsensitive 是否大小写不敏感匹配（默认 true）
+	// CaseInsensitive: 错误提示匹配忽略大小写（默认启用）
 	CaseInsensitive bool `mapstructure:"case_insensitive"`
-	// TrimSpace 是否在匹配前对行做 TrimSpace（默认 true）
+	// TrimSpace: 匹配前移除首尾空格（默认启用）
 	TrimSpace bool `mapstructure:"trim_space"`
 }
 
-// AutoInteractionConfig 配置中的自动交互项
+// AutoInteractionConfig 自动交互项
 type AutoInteractionConfig struct {
 	ExpectOutput string `mapstructure:"except_output"`
 	AutoSend     string `mapstructure:"command_auto_send"`
 }
 
-// PlatformDefaultsConfig 设备平台默认参数（可在配置文件中扩展）
+// PlatformDefaultsConfig 平台默认交互配置（提示符、分页、enable 与自动交互）
 type PlatformDefaultsConfig struct {
     PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
     DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
@@ -411,13 +415,13 @@ type PlatformDefaultsConfig struct {
     ErrorHints        []string                `mapstructure:"error_hints"`
     SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
     EnableRequired    bool                    `mapstructure:"enable_required"`
-    // OutputFilter 平台级输出过滤（覆盖全局 collector.output_filter）
+    // OutputFilter：平台级输出过滤（与全局 collector.output_filter 合并或覆盖）
     OutputFilter      OutputFilterConfig      `mapstructure:"output_filter"`
-    // Interact 平台级交互配置（包含自动交互、错误提示、大小写/空白匹配选项）
+    // Interact: 平台级交互配置（错误提示匹配）
     Interact          InteractConfig          `mapstructure:"interact"`
-    // 提权设置：当 enable_required 为 true 时，可指定提权命令与密码提示匹配
-    // enable_cli 定义提权命令（例如 "enable" 或 Linux 平台的 "sudo -i"）
-    // except_output 定义收到哪条输出后自动输入 enable 密码
+    // Enable/Sudo 提权命令与提示匹配
     EnableCLI          string `mapstructure:"enable_cli"`
     EnableExceptOutput string `mapstructure:"except_output"`
+    // 进入配置模式命令（按序尝试）
+    ConfigModeCLIs     []string `mapstructure:"config_mode_clis"`
 }

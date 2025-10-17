@@ -12,7 +12,7 @@ import (
 )
 
 // SetupRouter 设置路由
-func SetupRouter(collectorService *service.CollectorService, backupService *service.BackupService, formatService *service.FormatService) *gin.Engine {
+func SetupRouter(collectorService *service.CollectorService, backupService *service.BackupService, formatService *service.FormatService, deployService *service.DeployService) *gin.Engine {
 	// 设置Gin模式
 	gin.SetMode(gin.ReleaseMode)
 	
@@ -31,6 +31,7 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
     deviceHandler := handler.NewDeviceHandler()
     backupHandler := handler.NewBackupHandler(backupService)
     formattedHandler := handler.NewFormattedHandler(formatService)
+    deployHandler := handler.NewDeployHandler(deployService)
 	
 	// 根路径
 	r.GET("/", func(c *gin.Context) {
@@ -79,6 +80,9 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
             formatted.POST("/batch", formattedHandler.BatchFormatted)
             formatted.POST("/fast", formattedHandler.FastFormatted)
         }
+
+        // 部署路由
+        v1.POST("/deploy/fast", deployHandler.FastDeploy)
     }
 	
 	// 404处理

@@ -58,6 +58,7 @@ collector:
     cisco_ios:
       prompt_suffixes: [">", "#"]
       disable_paging_cmds: ["terminal length 0"]
+      config_mode_clis: ["configure terminal"]
       enable_required: true
       # 当需要提权时，设置提权命令与提示匹配
       # 示例：
@@ -89,7 +90,6 @@ collector:
         error_hints:
           - "invalid input detected"
           - "incomplete command"
-          - "ambiguous command"
           - "unknown command"
           - "invalid autocommand"
           - "line has invalid autocommand"
@@ -98,6 +98,7 @@ collector:
     huawei:
       prompt_suffixes: [">", "#", "]"]
       disable_paging_cmds: ["screen-length disable"]
+      config_mode_clis: ["system-view immediately", "system-view"]
       enable_required: false
       skip_delayed_echo: true
       output_filter:
@@ -124,6 +125,7 @@ collector:
     h3c:
       prompt_suffixes: [">", "#", "]"]
       disable_paging_cmds: ["screen-length disable"]
+      config_mode_clis: ["system-view immediately", "system-view"]
       enable_required: false
       skip_delayed_echo: true
       output_filter:
@@ -140,6 +142,8 @@ collector:
             command_auto_send: " "
           - except_output: "press any key"
             command_auto_send: " "
+          - except_output: "confirm"
+            command_auto_send: "y"
         error_hints:
           - "error:"
           - "unrecognized command"
@@ -171,6 +175,11 @@ collector:
         case_insensitive: true
         trim_space: true
 
+deploy:
+  # 部署等待时间（毫秒），用于部署前后状态采集与下发后等待
+  # 默认 2000 毫秒（2 秒），可根据设备特性调整
+  deploy_wait_ms: 2000
+
 # 数据库配置
 database:
   sqlite:
@@ -182,9 +191,9 @@ database:
 
 # SSH配置
 ssh:
-  timeout: 30s          # 单设备执行窗口（含登陆与命令执行）；接口未指定时使用
-  connect_timeout: 10s  # 设备连接/登陆超时（拨号与握手）；超时即判定登陆失败
-  keep_alive_interval: 10s
+  timeout: 10s          # 单设备执行窗口（含登陆与命令执行）；接口未指定时使用
+  connect_timeout: 2s  # 设备连接/登陆超时（拨号与握手）；超时即判定登陆失败
+  keep_alive_interval: 15s
   max_sessions: 100
   
 

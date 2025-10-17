@@ -497,36 +497,25 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
     platform := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
     if platform == "" { platform = "default" }
 
-	// 显示用原始命令队列：路由层已决定是否预组装系统命令，这里直接回显请求中的命令
-	displayCmds := func() []string {
-		out := make([]string, 0, len(request.CliList))
-		if len(request.CliList) > 0 {
-			out = append(out, request.CliList...)
-		}
-		return out
-	}()
-
+    // 输出结果直接使用实际执行命令，避免与请求索引错位
     out := make([]*CommandResultView, 0, len(rawResults))
-	// 解析模式：不再依赖 origin，改为从 metadata.collect_mode 派生
-	collectMode := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", request.Metadata["collect_mode"])))
-	if collectMode == "" {
-		collectMode = "customer"
-	}
-    dispIdx := 0
+    // 解析模式：不再依赖 origin，改为从 metadata.collect_mode 派生
+    collectMode := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", request.Metadata["collect_mode"])))
+    if collectMode == "" {
+        collectMode = "customer"
+    }
     for _, r := range rawResults {
         // 防御式：r 可能为 nil（例如连接被 keepalive 标记为断开导致 ExecuteCommand 返回 nil）
         cmdVal := ""
         if r != nil {
-            cmdVal = r.Command
+            cmdVal = strings.TrimSpace(r.Command)
         }
-		// 显示层使用原始命令映射；解析层继续用规范化命令
-		displayCmd := cmdVal
-		if dispIdx < len(displayCmds) {
-			displayCmd = displayCmds[dispIdx]
-		}
-		dispIdx++
-		// 当前不进行结构化解析，保持空数组以兼容 API 字段
-		var fmtRows interface{} = []map[string]interface{}{}
+        displayCmd := cmdVal
+        if displayCmd == "" {
+            displayCmd = "<unknown>"
+        }
+        // 当前不进行结构化解析，保持空数组以兼容 API 字段
+        var fmtRows interface{} = []map[string]interface{}{}
         // 错误提示检测：如配置了 error_hints，当输出行以提示前缀开头时标记错误
         detectedErr := ""
         if r != nil && r.Error == "" && collectMode != "customer" {
@@ -538,29 +527,19 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
                 lines := strings.Split(raw, "\n")
                 for _, ln := range lines {
                     t := ln
-                    if defaults.InteractTrimSpace {
-                        t = strings.TrimSpace(t)
-                    }
+                    if defaults.InteractTrimSpace { t = strings.TrimSpace(t) }
                     cmp := t
-                    if defaults.InteractCaseInsensitive {
-                        cmp = strings.ToLower(cmp)
-                    }
+                    if defaults.InteractCaseInsensitive { cmp = strings.ToLower(cmp) }
                     for _, h := range hints {
                         hh := h
-                        if defaults.InteractTrimSpace {
-                            hh = strings.TrimSpace(hh)
-                        }
-                        if defaults.InteractCaseInsensitive {
-                            hh = strings.ToLower(hh)
-                        }
+                        if defaults.InteractTrimSpace { hh = strings.TrimSpace(hh) }
+                        if defaults.InteractCaseInsensitive { hh = strings.ToLower(hh) }
                         if hh != "" && strings.HasPrefix(cmp, hh) {
                             detectedErr = fmt.Sprintf("command error hint matched: %s", t)
                             break
                         }
                     }
-                    if detectedErr != "" {
-                        break
-                    }
+                    if detectedErr != "" { break }
                 }
             }
         }
@@ -592,16 +571,14 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
             durationMsVal = 0
             rawStripped = ""
         }
-
-		view := &CommandResultView{
-			Command:      displayCmd,
-			RawOutput:    rawStripped,
-			FormatOutput: fmtRows,
-			Error:        errorVal,
-			ExitCode:     exitCodeVal,
-			DurationMS:   durationMsVal,
-		}
-
+        view := &CommandResultView{
+            Command:      displayCmd,
+            RawOutput:    rawStripped,
+            FormatOutput: fmtRows,
+            Error:        errorVal,
+            ExitCode:     exitCodeVal,
+            DurationMS:   durationMsVal,
+        }
         logger.Debugf("Collector output filter: cmd=%q lines_before=%d lines_after=%d exit=%d dur_ms=%d error_propagated=%v", displayCmd, beforeLines, afterLines, exitCodeVal, durationMsVal, propagated)
         out = append(out, view)
     }
