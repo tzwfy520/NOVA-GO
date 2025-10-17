@@ -12,7 +12,7 @@ import (
 )
 
 // SetupRouter 设置路由
-func SetupRouter(collectorService *service.CollectorService, backupService *service.BackupService) *gin.Engine {
+func SetupRouter(collectorService *service.CollectorService, backupService *service.BackupService, formatService *service.FormatService) *gin.Engine {
 	// 设置Gin模式
 	gin.SetMode(gin.ReleaseMode)
 	
@@ -30,6 +30,7 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
     collectorHandler := handler.NewCollectorHandler(collectorService)
     deviceHandler := handler.NewDeviceHandler()
     backupHandler := handler.NewBackupHandler(backupService)
+    formattedHandler := handler.NewFormattedHandler(formatService)
 	
 	// 根路径
 	r.GET("/", func(c *gin.Context) {
@@ -71,6 +72,13 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 
         // 备份路由
         v1.POST("/backup/batch", backupHandler.BatchBackup)
+
+        // 数据格式化路由
+        formatted := v1.Group("/formatted")
+        {
+            formatted.POST("/batch", formattedHandler.BatchFormatted)
+            formatted.POST("/fast", formattedHandler.FastFormatted)
+        }
     }
 	
 	// 404处理
@@ -162,6 +170,6 @@ func LoggingMiddleware() gin.HandlerFunc {
 
 // generateRequestID 生成请求ID
 func generateRequestID() string {
-	// 简单的请求ID生成，实际项目中可以使用UUID
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+    // 简单的请求ID生成，实际项目中可以使用UUID
+    return fmt.Sprintf("%d", time.Now().UnixNano())
 }

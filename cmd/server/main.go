@@ -6,6 +6,7 @@ import (
     "net/http"
     "os"
     "os/signal"
+    "strings"
     "syscall"
     "time"
 
@@ -41,11 +42,14 @@ func main() {
 
     logger.Info("Starting SSH Collector Pro Server", "version", "1.0.0")
 
-    // 打印并发档位应用情况
-    if cfg.Collector.ConcurrencyProfile != "" {
-        logger.Info("Concurrency profile applied", "profile", cfg.Collector.ConcurrencyProfile, "workers", cfg.Collector.Concurrent)
+    // 打印并发档位应用情况（按实际 workers 与 threads 输出）
+    workers := cfg.Collector.Concurrent
+    threads := cfg.Collector.Threads
+    prof := strings.TrimSpace(cfg.Collector.ConcurrencyProfile)
+    if prof != "" {
+        logger.Info("Concurrency profile applied", "profile", prof, "workers", workers, "threads", threads)
     } else {
-        logger.Info("Concurrency set by numeric value", "workers", cfg.Collector.Concurrent)
+        logger.Info("Concurrency set by numeric value", "workers", workers, "threads", threads)
     }
 
 	// 初始化数据库
@@ -71,8 +75,15 @@ func main() {
     }
     defer backupService.Stop()
 
+    // 创建格式化服务
+    formatService := service.NewFormatService(cfg)
+    if err := formatService.Start(ctx); err != nil {
+        logger.Fatal("Failed to start format service", "error", err)
+    }
+    defer formatService.Stop()
+
     // 设置路由
-    r := router.SetupRouter(collectorService, backupService)
+    r := router.SetupRouter(collectorService, backupService, formatService)
 
 	// 创建HTTP服务器
 	server := &http.Server{

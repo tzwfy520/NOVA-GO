@@ -345,16 +345,17 @@ database:
 collector:
   concurrency_profile: "S"   # 可选 S/M/L/XL（支持 "Concurrency-S" 等写法）
   concurrency_profiles:
-    S: 8    # 2c4g
-    M: 16   # 4c8g
-    L: 32   # 8c16g
-    XL: 64  # 16c32g
+    S:   { concurrent: 8,  threads: 32 }   # 2c4g
+    M:   { concurrent: 16, threads: 64 }   # 4c8g
+    L:   { concurrent: 32, threads: 128 }  # 8c16g
+    XL:  { concurrent: 64, threads: 256 }  # 16c32g
   concurrent: 5              # 若未配置档位则使用此数值
 ```
 
 说明：
 - 档位应用后会覆盖 `collector.concurrent`，作用于批处理并发与 SSH 连接池。
-- 启动日志会打印当前档位与并发数，便于运维核验。
+- 同时应用 `threads`，覆盖 SSH 会话上限（max_sessions）。
+- 启动日志会打印当前档位、并发与线程数，便于运维核验。
 
  
 

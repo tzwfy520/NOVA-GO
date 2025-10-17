@@ -150,7 +150,7 @@ backup:
 - 输出过滤逻辑统一复用 `collector.output_filter`，避免重复配置与行为不一致。
 
 ## 并发、超时与重试
-- 设备并发度：遵循采集器全局并发档位 `collector.concurrency_profile`，依据 `collector.concurrency_profiles` 映射取值（S=8, M=16, L=32, XL=64）。如未配置档位，回退到 `collector.concurrent`。
+- 设备并发度：遵循采集器全局并发档位 `collector.concurrency_profile`，依据 `collector.concurrency_profiles` 映射取值（示例：S={8,32}, M={16,64}, L={32,128}, XL={64,256}）。如未配置档位，回退到 `collector.concurrent`。档位中的 `threads` 将覆盖 SSH 会话上限。
 - 超时：请求级 `timeout` 上限覆盖；命令执行上下文使用该值（或平台默认计算）。
 - 重试：命令级 `retry.count` 次，指数退避或固定 `backoff_ms`；避免重复写入同一对象（命名幂等）。
 

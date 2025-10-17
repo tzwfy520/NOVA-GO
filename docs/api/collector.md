@@ -64,6 +64,7 @@
 ## 重要说明（系统批量采集）
 - `device_platform` 仍为必填，用于交互参数与提示符匹配。
 - 不再注入平台默认命令；仅执行用户在 `device_list[].cli_list` 中提供的命令。
+- 统一交互层（InteractBasic）负责预命令注入（如 `enable`、关闭分页）与结果过滤，服务层不再重复处理。
 
 > 重要：原单设备接口已下线，请使用批量接口 `/api/v1/collector/batch/custom` 或 `/api/v1/collector/batch/system`。
 

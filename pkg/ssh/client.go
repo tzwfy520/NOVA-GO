@@ -10,13 +10,17 @@ import (
 
     "golang.org/x/crypto/ssh"
     "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+    "github.com/sshcollectorpro/sshcollectorpro/internal/util"
 )
 
 // Config SSH配置
 type Config struct {
-	Timeout     time.Duration `yaml:"timeout"`
-	KeepAlive   time.Duration `yaml:"keep_alive"`
-	MaxSessions int           `yaml:"max_sessions"`
+    // Timeout 为设备命令执行的整体窗口（不用于连接/握手）
+    Timeout        time.Duration `yaml:"timeout"`
+    // ConnectTimeout 为拨号/握手阶段的超时窗口
+    ConnectTimeout time.Duration `yaml:"connect_timeout"`
+    KeepAlive   time.Duration `yaml:"keep_alive"`
+    MaxSessions int           `yaml:"max_sessions"`
 }
 
 // Client SSH客户端
@@ -51,6 +55,8 @@ type CommandResult struct {
 // 目前支持在执行 "enable" 时识别密码提示并自动输入 enable 密码
 type InteractiveOptions struct {
     EnablePassword string
+    // 登录密码（Linux sudo 场景下可能需要用户密码而非“enable”口令）
+    LoginPassword string
     // 通用提权配置：当当前命令等于 EnableCLI 时，进入提权流程
     // EnableExpectOutput 用于匹配密码提示（大小写不敏感，包含匹配）
     EnableCLI         string
@@ -87,11 +93,11 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 	c.info = info
 
 	// 构建SSH配置
-	sshConfig := &ssh.ClientConfig{
-		User:            info.Username,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         c.config.Timeout,
-		Config: ssh.Config{
+    sshConfig := &ssh.ClientConfig{
+        User:            info.Username,
+        HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+        Timeout:         c.config.ConnectTimeout,
+        Config: ssh.Config{
 			// 支持旧版本的密钥交换算法
 			KeyExchanges: []string{
 				"diffie-hellman-group14-sha256",
@@ -158,9 +164,7 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
     address := fmt.Sprintf("%s:%d", info.Host, info.Port)
 
     // 使用context控制连接超时
-    dialer := &net.Dialer{
-        Timeout: c.config.Timeout,
-    }
+    dialer := &net.Dialer{ Timeout: c.config.ConnectTimeout }
 
     // 调试：拨号开始
     if dl, ok := ctx.Deadline(); ok {
@@ -185,10 +189,10 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
         _ = conn.SetDeadline(dl)
         usedDeadline = "ctx"
         deadlineTime = dl
-    } else if c.config.Timeout > 0 {
-        t := time.Now().Add(c.config.Timeout)
+    } else if c.config.ConnectTimeout > 0 {
+        t := time.Now().Add(c.config.ConnectTimeout)
         _ = conn.SetDeadline(t)
-        usedDeadline = "ssh.timeout"
+        usedDeadline = "ssh.connect_timeout"
         deadlineTime = t
     } else {
         usedDeadline = "none"
@@ -222,51 +226,56 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 // "ssh: rejected: administratively prohibited (open failed)" 的情况，
 // 进行短延迟重试以提高稳定性。
 func (c *Client) newSessionWithRetry() (*ssh.Session, error) {
-	if c.connection == nil {
-		return nil, fmt.Errorf("SSH connection not established")
-	}
+    if c.connection == nil {
+        return nil, fmt.Errorf("SSH connection not established")
+    }
 
-	// 退避策略：立即、200ms、500ms、1s、2s，共5次
-	backoffs := []time.Duration{0, 200 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
-	var lastErr error
-	for _, d := range backoffs {
-		if d > 0 {
-			time.Sleep(d)
-		}
-		sess, err := c.connection.NewSession()
-		if err == nil {
-			return sess, nil
-		}
-		lastErr = err
-		// 若错误不是通道被管理拒绝/打开失败，继续有限次重试以防瞬时状态
-		// 主要针对 "administratively prohibited"/"open failed" 文案做退避
+    // 退避策略：立即、200ms、500ms、1s、2s，共5次
+    backoffs := []time.Duration{0, 200 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+    var lastErr error
+    logger.Debugf("SSH newSession: attempts=%d", len(backoffs))
+    for i, d := range backoffs {
+        if d > 0 {
+            time.Sleep(d)
+        }
+        sess, err := c.connection.NewSession()
+        if err == nil {
+            logger.Debugf("SSH newSession: attempt %d succeeded", i+1)
+            return sess, nil
+        }
+        lastErr = err
+        logger.Debugf("SSH newSession: attempt %d failed: %v", i+1, err)
+        // 若错误不是通道被管理拒绝/打开失败，继续有限次重试以防瞬时状态
+        // 主要针对 "administratively prohibited"/"open failed" 文案做退避
         msg := strings.ToLower(err.Error())
         // 包含 EOF 也作为可重试错误（部分设备在登录后短时间内打开会话会返回 EOF）
         if strings.Contains(msg, "eof") && c.info != nil {
             // 尝试一次自动重连：关闭旧连接后根据保存的参数重建连接
             // 使用 SSH 配置的 Timeout 作为重连的超时窗口
             _ = c.Close()
-            ctx, cancel := context.WithTimeout(context.Background(), c.config.Timeout)
+            ctx, cancel := context.WithTimeout(context.Background(), c.config.ConnectTimeout)
             // 忽略重连错误并继续后续退避，如果重连成功则下一次循环可能成功创建会话
             _ = c.Connect(ctx, c.info)
             cancel()
             // 短暂等待以让设备端就绪
             time.Sleep(200 * time.Millisecond)
+            logger.Debug("SSH newSession: reconnect after EOF triggered")
             // 继续进入下一次退避尝试
             continue
         }
         // 处理断开类错误：例如 "ssh: disconnect, reason 2: Out of context message type 97"
         if (strings.Contains(msg, "disconnect") || strings.Contains(msg, "out of context") || strings.Contains(msg, "message type 97")) && c.info != nil {
             _ = c.Close()
-            ctx, cancel := context.WithTimeout(context.Background(), c.config.Timeout)
+            ctx, cancel := context.WithTimeout(context.Background(), c.config.ConnectTimeout)
             _ = c.Connect(ctx, c.info)
             cancel()
             time.Sleep(200 * time.Millisecond)
+            logger.Debug("SSH newSession: reconnect after disconnect/type97 triggered")
             continue
         }
-		// 非典型错误也尝试后续退避，但不额外处理
-	}
-	return nil, lastErr
+        // 非典型错误也尝试后续退避，但不额外处理
+    }
+    return nil, lastErr
 }
 
 // ExecuteCommand 执行单个命令
@@ -304,7 +313,7 @@ func (c *Client) ExecuteCommand(ctx context.Context, command string) (*CommandRe
     select {
     case <-done:
         result.Duration = time.Since(startTime)
-        result.Output = string(output)
+        result.Output = util.EnsureUTF8Bytes(output)
         if cmdErr != nil {
             result.Error = cmdErr.Error()
             if exitError, ok := cmdErr.(*ssh.ExitError); ok {
@@ -326,7 +335,7 @@ func (c *Client) ExecuteCommand(ctx context.Context, command string) (*CommandRe
         case <-time.After(500 * time.Millisecond):
         }
         result.Duration = time.Since(startTime)
-        result.Output = string(output)
+        result.Output = util.EnsureUTF8Bytes(output)
         result.Error = "command timeout"
         result.ExitCode = -1
         return result, ctx.Err()
@@ -438,7 +447,7 @@ func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, 
 		for _, response := range responses {
 			time.Sleep(100 * time.Millisecond) // 等待命令准备
 			// 网络设备通常期望 CRLF
-			_, _ = stdin.Write([]byte(response + "\r\n"))
+    stdin.Write([]byte(response + "\r\n"))
 		}
 	}()
 
@@ -463,7 +472,7 @@ func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, 
 	select {
 	case err := <-done:
 		result.Duration = time.Since(startTime)
-		result.Output = output.String()
+		result.Output = util.EnsureUTF8(output.String())
 		if err != nil {
 			result.Error = err.Error()
 			if exitError, ok := err.(*ssh.ExitError); ok {
@@ -478,7 +487,7 @@ func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, 
 	case <-ctx.Done():
 		session.Signal(ssh.SIGTERM)
 		result.Duration = time.Since(startTime)
-		result.Output = output.String()
+		result.Output = util.EnsureUTF8(output.String())
 		result.Error = "command timeout"
 		result.ExitCode = -1
 		return result, ctx.Err()
@@ -529,6 +538,20 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 
     // 调试：会话与PTY
     logger.Debugf("SSH Interactive: session created; commands=%d", len(commands))
+    // 选项摘要，便于现场定位交互行为差异（提示符后缀、退出命令、回显跳过、提权参数、自动交互项数）
+    if opts != nil {
+        logger.Debugf("SSH Interactive options: prompt_suffixes=%v exit_cmds=%v skip_delayed_echo=%v cmd_interval_ms=%d enable_cli=%q expect=%q auto_interactions=%d",
+            promptSuffixes,
+            opts.ExitCommands,
+            opts.SkipDelayedEcho,
+            opts.CommandIntervalMS,
+            strings.TrimSpace(opts.EnableCLI),
+            strings.TrimSpace(opts.EnableExpectOutput),
+            len(opts.AutoInteractions),
+        )
+    } else {
+        logger.Debugf("SSH Interactive options: prompt_suffixes=%v (no opts)", promptSuffixes)
+    }
 
 	stdin, err := session.StdinPipe()
 	if err != nil {
@@ -555,7 +578,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
     logger.Debug("SSH Interactive: shell started; sending CRLF to elicit prompt")
 
 	// 发送 CRLF 促使设备输出当前提示符，便于后续检测（网络设备通常期望 CRLF）
-	_, _ = stdin.Write([]byte("\r\n"))
+    stdin.Write([]byte("\r\n"))
 
 	// 提示符诱发器：在初始阶段定期发送 CRLF，帮助设备输出提示符
 	// 某些设备在建立 PTY 后需要键入回车才能显示提示符
@@ -574,7 +597,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 				if count >= 12 {
 					return
 				}
-				_, _ = stdin.Write([]byte("\r\n"))
+    stdin.Write([]byte("\r\n"))
 				count++
 			}
 		}
@@ -642,33 +665,34 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 		}
 	}()
 
-	// 辅助函数：清洗行内容，移除 ANSI 转义序列与不可见控制符，便于稳定提示符检测
-	sanitize := func(s string) string {
-		// 移除常见 ANSI 转义序列，如 \x1b[31m、\x1b[0K 等
-		// 简单处理：逐段过滤 ESC 开头的控制序列
-		b := make([]rune, 0, len(s))
-		skip := false
-		for i := 0; i < len(s); i++ {
-			ch := s[i]
-			if skip {
-				// 跳过直到命令字符结尾（以字母结尾的 CSI 序列）
-				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
-					skip = false
-				}
-				continue
-			}
-			if ch == 0x1b { // ESC
-				skip = true
-				continue
-			}
-			// 过滤其他不可见控制字符（<0x20，除换行与回车已被统一处理）
-			if ch < 0x20 && ch != '\t' { // 保留制表符以防列对齐
-				continue
-			}
-			b = append(b, rune(ch))
-		}
-		return strings.TrimSpace(string(b))
-	}
+    // 辅助函数：清洗行内容，移除 ANSI 转义序列与不可见控制符，便于稳定提示符检测
+    // 修正：按 Unicode rune 迭代，避免将多字节 UTF-8 拆成单字节导致中文/emoji 编码损坏
+    sanitize := func(s string) string {
+        // 移除常见 ANSI 转义序列，如 \x1b[31m、\x1b[0K 等
+        // 简单处理：逐段过滤 ESC 开头的控制序列（以 ASCII 字母结尾的 CSI 序列）
+        var b strings.Builder
+        b.Grow(len(s))
+        skip := false
+        for _, r := range s {
+            if skip {
+                // 跳过直到命令字符结尾（以字母结尾的 CSI 序列）
+                if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+                    skip = false
+                }
+                continue
+            }
+            if r == 0x1b { // ESC
+                skip = true
+                continue
+            }
+            // 过滤其他不可见控制字符（<0x20，除换行与回车已被统一处理）
+            if r < 0x20 && r != '\t' { // 保留制表符以防列对齐
+                continue
+            }
+            b.WriteRune(r)
+        }
+        return strings.TrimSpace(b.String())
+    }
 
 	// 捕获首个提示符的主机名前缀，用于后续更稳健的提示符判断
 	var promptPrefix string
@@ -782,11 +806,18 @@ StartCommands:
 		// 跳过命令回显（部分设备会回显命令，且可能因换行/分页被拆分）
 		echoRemain := strings.TrimSpace(cmd)
 		cmdStart := time.Now()
+        // 最近一次接收到输出的时间，用于“静默完成”检测
+        lastRecvAt := time.Now()
+        // 静默阈值：若在看到内容后，持续 quietAfter 未再收到输出，则认为该命令完成
+        // 选择较为保守的 800ms，避免在存在分页/慢速输出时误判
+        quietAfter := 800 * time.Millisecond
         // 自动交互仅命中一次（每条命令），触发后不再重复执行
         autoInteractDone := false
         // 针对提权命令的密码输入增加超时回退：若未检测到提示，按时发送一次
         enableFallbackSent := false
         var enableFallback <-chan time.Time
+        // 当 sudo 拒绝密码（"Sorry, try again."）时，允许用登录密码进行一次安全回退
+        sorryRetryDone := false
         // 判断当前命令是否为提权命令
         isEnableCmd := func(curr string) bool {
             ctrim := strings.TrimSpace(curr)
@@ -810,7 +841,7 @@ StartCommands:
                 logger.Debug("SSH Interactive: ctx canceled; returning partial results")
                 results = append(results, &CommandResult{
                     Command:  cmd,
-                    Output:   out.String(),
+                    Output:   util.EnsureUTF8(out.String()),
                     Error:    ctx.Err().Error(),
                     ExitCode: -1,
                     Duration: time.Since(cmdStart),
@@ -821,6 +852,7 @@ StartCommands:
                 // 统一清洗行内容用于比较和提示符检测
                 clean := sanitize(line)
                 lastCleanLine = clean
+                lastRecvAt = time.Now()
 				// 若出现“提示符+上一条命令”的延迟回显，直接跳过，避免写入当前命令的输出
 				// 例如："hostname#terminal length 0" 在下一条命令开始时到达
 				if opts != nil && opts.SkipDelayedEcho && clean != "" && prevCmd != "" {
@@ -880,7 +912,7 @@ StartCommands:
                     }
                     results = append(results, &CommandResult{
                         Command:  cmd,
-                        Output:   out.String(),
+                        Output:   util.EnsureUTF8(out.String()),
                         Error:    errStr,
                         ExitCode: exitCode,
                         Duration: time.Since(cmdStart),
@@ -888,12 +920,12 @@ StartCommands:
                     goto NextCmd
                 }
 
-				// 写入正常内容
-				out.WriteString(clean)
-				out.WriteString("\n")
-				if strings.TrimSpace(clean) != "" {
-					sawContent = true
-				}
+                // 写入正常内容
+                out.WriteString(clean)
+                out.WriteString("\n")
+                if strings.TrimSpace(clean) != "" {
+                    sawContent = true
+                }
 
 				// 在执行 enable 时，遇到密码提示则自动输入密码
 				// 扩展识别范围："Password:", "Enter password:", "Password required", "Secret:", "enable secret", 中文"密码"
@@ -905,7 +937,7 @@ StartCommands:
                     if exp != "" {
                         if strings.Contains(lower, strings.ToLower(exp)) {
                             logger.Infof("Enable password prompt matched; expect=%q line=%q cmd=%q", exp, clean, cmd)
-                            _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+    stdin.Write([]byte(opts.EnablePassword + "\r\n"))
                             enableFallbackSent = true
                             // 不立即结束，继续等待提示符，以确保进入特权模式
                             continue
@@ -914,9 +946,25 @@ StartCommands:
                         // 回退启发式：常见密码提示关键词
                         if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "enable secret") || strings.Contains(lower, "密码") {
                             logger.Infof("Enable password heuristic matched; line=%q cmd=%q", clean, cmd)
-                            _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+    stdin.Write([]byte(opts.EnablePassword + "\r\n"))
                             enableFallbackSent = true
                             continue
+                        }
+                    }
+                }
+                // 处理 sudo 拒绝密码的情况：出现 "Sorry, try again." 或认证失败时，尝试用登录密码回退一次
+                if opts != nil && isEnableCmd(cmd) {
+                    if strings.Contains(lower, "sorry, try again") || strings.Contains(lower, "authentication failure") {
+                        logger.Warnf("Enable password rejected; will attempt login password once; line=%q cmd=%q", clean, cmd)
+                        if !sorryRetryDone {
+                            lp := strings.TrimSpace(opts.LoginPassword)
+                            ep := strings.TrimSpace(opts.EnablePassword)
+                            if lp != "" && lp != ep {
+                                stdin.Write([]byte(lp + "\r\n"))
+                                sorryRetryDone = true
+                                // 不立即结束，继续等待提示符，以确保进入特权模式
+                                continue
+                            }
                         }
                     }
                 }
@@ -928,7 +976,7 @@ StartCommands:
 							continue
 						}
 						if strings.Contains(lower, strings.ToLower(ai.ExpectOutput)) {
-							_, _ = stdin.Write([]byte(ai.AutoSend + "\r\n"))
+    stdin.Write([]byte(ai.AutoSend + "\r\n"))
 							// 命中后标记不再重复自动执行
 							autoInteractDone = true
 							break
@@ -939,16 +987,32 @@ StartCommands:
             case <-enableFallback:
                 if !enableFallbackSent {
                     logger.Warnf("Enable password fallback sending; cmd=%q last_line=%q", cmd, lastCleanLine)
-                    _, _ = stdin.Write([]byte(opts.EnablePassword + "\r\n"))
+    stdin.Write([]byte(opts.EnablePassword + "\r\n"))
                     enableFallbackSent = true
                     // 继续等待提示符
                     continue
                 }
+            // 静默完成检测：在已经读取到内容(sawContent)的情况下，如果持续一段时间未再收到输出，认为命令已完成
+            // 该逻辑可以避免因提示符识别失败导致的“总是等到整体超时”问题
+            case <-time.After(250 * time.Millisecond):
+                if sawContent && time.Since(lastRecvAt) >= quietAfter {
+                    results = append(results, &CommandResult{
+                        Command:  cmd,
+                        Output:   util.EnsureUTF8(out.String()),
+                        Error:    "",
+                        ExitCode: 0,
+                        Duration: time.Since(cmdStart),
+                    })
+                    logger.Debugf("SSH Interactive: quiet-complete reached (%.0fms): %s", quietAfter.Seconds()*1000, cmd)
+                    goto NextCmd
+                }
+                // 若未达到静默完成条件，继续等待
+                continue
             case <-time.After(30 * time.Second):
                 // 超时保护：将当前已读作为输出返回
                 results = append(results, &CommandResult{
                     Command:  cmd,
-                    Output:   out.String(),
+                    Output:   util.EnsureUTF8(out.String()),
                     Error:    "command timeout",
                     ExitCode: -1,
                     Duration: time.Since(cmdStart),
@@ -958,6 +1022,7 @@ StartCommands:
             }
         }
 	NextCmd:
+        logger.Debugf("SSH Interactive: command finished: %s; duration=%s; bytes=%d", cmd, time.Since(cmdStart), len(out.String()))
 		// 记录上一条命令，供下一条命令跳过其延迟回显
 		prevCmd = cmd
 		// 命令间隔控制（避免过快触发设备限流或分页）
@@ -973,7 +1038,7 @@ StartCommands:
 		exitSeq = opts.ExitCommands
 	}
 	for _, ec := range exitSeq {
-		_, _ = stdin.Write([]byte(ec + "\r\n"))
+    stdin.Write([]byte(ec + "\r\n"))
 		time.Sleep(150 * time.Millisecond)
 	}
 

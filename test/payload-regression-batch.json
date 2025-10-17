@@ -1,0 +1,47 @@
+{
+  "task_id": "T-2001",
+  "task_name": "custom-batch-check",
+  "retry_flag": 2,
+  "timeout": 30,
+  "devices": [
+    {
+      "device_ip": "139.196.196.96",
+      "port": 21202,
+      "device_name": "test-out-r1",
+      "device_platform": "h3c_sr",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "cli_list": [
+        "display version",
+        "display license"
+      ]
+    },
+    {
+      "device_ip": "139.196.196.96",
+      "port": 21201,
+      "device_name": "test-out-sw1",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "cli_list": [
+        "show version",
+        "show run"
+      ]
+    },
+    {
+      "device_ip": "10.200.40.202",
+      "port": 22,
+      "device_name": "test-out-r1",
+      "device_platform": "h3c_sr",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "cli_list": [
+        "display version",
+        "display license"
+      ]
+    }
+  ]
+}

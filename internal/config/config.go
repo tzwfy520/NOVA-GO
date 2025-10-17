@@ -19,6 +19,7 @@ type Config struct {
     SSH       SSHConfig       `mapstructure:"ssh"`
     Log       LogConfig       `mapstructure:"log"`
     Backup    BackupConfig    `mapstructure:"backup"`
+    DataFormat DataFormatConfig `mapstructure:"data_format"`
 }
 
 // ServerConfig 服务器配置
@@ -32,22 +33,31 @@ type ServerConfig struct {
 
 // CollectorConfig 采集器配置
 type CollectorConfig struct {
-	ID         string   `mapstructure:"id"`
-	Type       string   `mapstructure:"type"`
-	Version    string   `mapstructure:"version"`
-	Tags       []string `mapstructure:"tags"`
-	Threads    int      `mapstructure:"threads"`
-	Concurrent int      `mapstructure:"concurrent"`
-	// ConcurrencyProfile 并发档位：S/M/L/XL（优先级高于 concurrent 数值）
-	ConcurrencyProfile string `mapstructure:"concurrency_profile"`
-	// ConcurrencyProfiles 并发档位映射：{"S":8, "M":16, ...}
-	ConcurrencyProfiles map[string]int `mapstructure:"concurrency_profiles"`
+    ID         string   `mapstructure:"id"`
+    Type       string   `mapstructure:"type"`
+    Version    string   `mapstructure:"version"`
+    Tags       []string `mapstructure:"tags"`
+    Threads    int      `mapstructure:"threads"`
+    Concurrent int      `mapstructure:"concurrent"`
+    // RetryFlags 默认重试次数：接口未指定时使用
+    RetryFlags int      `mapstructure:"retry_flags"`
+    // ConcurrencyProfile 并发档位：S/M/L/XL（优先级高于 concurrent 数值）
+    ConcurrencyProfile string `mapstructure:"concurrency_profile"`
+    // ConcurrencyProfiles 并发档位映射：每个档位同时指定并发与线程数
+    // 结构示例：{"S":{"concurrent":8,"threads":32}, ...}
+    ConcurrencyProfiles map[string]ConcurrencyProfileConfig `mapstructure:"concurrency_profiles"`
 	// OutputFilter 用于原始输出的行过滤（移除分页提示等）
 	OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
 	// Interact 交互配置：自动交互参数对与错误提示匹配
 	Interact InteractConfig `mapstructure:"interact"`
 	// DeviceDefaults 按设备平台加载的交互/适配参数（提示符、分页、enable、自动交互）
 	DeviceDefaults map[string]PlatformDefaultsConfig `mapstructure:"device_defaults"`
+}
+
+// ConcurrencyProfileConfig 并发档位配置：并发与线程数
+type ConcurrencyProfileConfig struct {
+    Concurrent int `mapstructure:"concurrent"`
+    Threads    int `mapstructure:"threads"`
 }
 
 // DatabaseConfig 数据库配置
@@ -67,6 +77,12 @@ type SQLiteConfig struct {
 type StorageConfig struct {
     Minio    MinioConfig    `mapstructure:"minio"`
     Postgres PostgresConfig `mapstructure:"postgres"`
+}
+
+// DataFormatConfig 格式化数据相关配置
+type DataFormatConfig struct {
+    // MinioPrefix 用于格式化数据在 MinIO 中的顶层路径（不含 bucket）
+    MinioPrefix string `mapstructure:"minio_prefix"`
 }
 
 // BackupConfig 备份服务配置
@@ -117,9 +133,11 @@ type PostgresConfig struct {
 
 // SSHConfig SSH配置
 type SSHConfig struct {
-	Timeout           time.Duration `mapstructure:"timeout"`
-	KeepAliveInterval time.Duration `mapstructure:"keep_alive_interval"`
-	MaxSessions       int           `mapstructure:"max_sessions"`
+    Timeout           time.Duration `mapstructure:"timeout"`
+    // ConnectTimeout 设备连接（拨号/握手）超时；超时即判定登陆失败
+    ConnectTimeout    time.Duration `mapstructure:"connect_timeout"`
+    KeepAliveInterval time.Duration `mapstructure:"keep_alive_interval"`
+    MaxSessions       int           `mapstructure:"max_sessions"`
 }
 
 // LogConfig 日志配置
@@ -204,57 +222,20 @@ func setDefaults() {
 	// 默认错误提示前缀（可按需调整或清空）
 	viper.SetDefault("collector.interact.error_hints", []string{"ERROR:", "invalid parameters detect"})
 
-	// 设备平台默认（可在配置文件中覆盖或新增平台）
-	viper.SetDefault("collector.device_defaults", map[string]map[string]interface{}{
-		"cisco_ios": {
-			"prompt_suffixes":     []string{">", "#"},
-			"disable_paging_cmds": []string{"terminal length 0"},
-			"enable_required":     true,
-			"enable_cli":          "enable",
-			"except_output":       "Password:",
-			"skip_delayed_echo":   true,
-			"error_hints":         []string{"invalid input detected", "incomplete command", "ambiguous command", "unknown command", "invalid autocommand", "line has invalid autocommand"},
-			"auto_interactions": []map[string]string{
-				{"except_output": "--more--", "command_auto_send": " "},
-				{"except_output": "more", "command_auto_send": " "},
-				{"except_output": "press any key", "command_auto_send": " "},
-				{"except_output": "confirm", "command_auto_send": "y"},
-				{"except_output": "[yes/no]", "command_auto_send": "yes"},
-			},
-		},
-		"huawei": {
-			"prompt_suffixes":     []string{">", "#", "]"},
-			"disable_paging_cmds": []string{"screen-length disable"},
-			"enable_required":     false,
-			"skip_delayed_echo":   true,
-			"error_hints":         []string{"error:", "unrecognized command"},
-			"auto_interactions": []map[string]string{
-				{"except_output": "more", "command_auto_send": " "},
-				{"except_output": "press any key", "command_auto_send": " "},
-				{"except_output": "confirm", "command_auto_send": "y"},
-			},
-		},
-		"h3c": {
-			"prompt_suffixes":     []string{">", "#", "]"},
-			"disable_paging_cmds": []string{"screen-length disable"},
-			"enable_required":     false,
-			"skip_delayed_echo":   true,
-			"error_hints":         []string{"error:", "unrecognized command"},
-			"auto_interactions": []map[string]string{
-				{"except_output": "more", "command_auto_send": " "},
-				{"except_output": "press any key", "command_auto_send": " "},
-			},
-		},
-	})
+    // 不预设设备平台默认项：完全由配置文件控制。
+    // 若需要兜底，可在配置文件中提供 collector.device_defaults.default 项。
+    // 这里不设置 viper 默认，避免内置平台行为。
 
-    // 默认并发档位配置
+    // 默认并发档位配置（包含并发与线程数）
     viper.SetDefault("collector.concurrency_profile", "S")
-    viper.SetDefault("collector.concurrency_profiles", map[string]int{
-        "S":  8,  // 2c4g
-        "M":  16, // 4c8g
-        "L":  32, // 8c16g
-        "XL": 64, // 16c32g
+    viper.SetDefault("collector.concurrency_profiles", map[string]map[string]int{
+        "S":  {"concurrent": 8,  "threads": 32},  // 2c4g
+        "M":  {"concurrent": 16, "threads": 64},  // 4c8g
+        "L":  {"concurrent": 32, "threads": 128}, // 8c16g
+        "XL": {"concurrent": 64, "threads": 256}, // 16c32g
     })
+    // 默认重试次数（接口未指定时使用）。若配置文件未设置，则使用 1。
+    viper.SetDefault("collector.retry_flags", 1)
 
     // 备份服务默认配置
     viper.SetDefault("backup.storage_backend", "local")
@@ -270,6 +251,13 @@ func setDefaults() {
     viper.SetDefault("backup.aggregate.filename", "all_cli.txt")
     // 聚合仅写入模式默认关闭（false 表示仍写入逐命令文件）
     viper.SetDefault("backup.aggregate.aggregate_only", false)
+
+    // 格式化数据默认配置
+    // 仅定义 MinIO 路径前缀，最终对象路径为 /{minio_prefix}/{save_dir}/{task_id}/...
+    viper.SetDefault("data_format.minio_prefix", "data-formats")
+
+    // SSH 连接默认超时（拨号/握手阶段），避免长时间阻塞
+    viper.SetDefault("ssh.connect_timeout", 10*time.Second)
 }
 
 // Get 获取全局配置
@@ -292,47 +280,92 @@ func replaceEnvVars(config Config) Config {
 
 // applyConcurrencyProfile 根据并发档位设置并发数（覆盖 Collector.Concurrent）
 func applyConcurrencyProfile(cfg *Config) {
-	prof := strings.TrimSpace(cfg.Collector.ConcurrencyProfile)
-	if prof == "" {
-		return
-	}
-	// 兼容大小写与可能的前缀（例如 "Concurrency-S"）
-	p := strings.ToUpper(prof)
-	if after, ok := strings.CutPrefix(p, "CONCURRENCY-"); ok {
-		p = after
+    prof := strings.TrimSpace(cfg.Collector.ConcurrencyProfile)
+    if prof == "" {
+        return
+    }
+    // 兼容大小写与可能的前缀（例如 "Concurrency-S"）
+    p := strings.ToUpper(prof)
+    if after, ok := strings.CutPrefix(p, "CONCURRENCY-"); ok {
+        p = after
 
-	}
+    }
 
-	// 获取档位映射
-	mapping := cfg.Collector.ConcurrencyProfiles
-	if len(mapping) == 0 {
-		// 从默认值读取
-		raw := viper.GetStringMap("collector.concurrency_profiles")
-		m := make(map[string]int, len(raw))
-		for k, v := range raw {
-			// viper 可能将数字解析为各种类型，统一转换为 int
-			key := strings.ToUpper(k)
-			switch vv := v.(type) {
-			case int:
-				m[key] = vv
-			case int64:
-				m[key] = int(vv)
-			case float64:
-				m[key] = int(vv)
-			case string:
-				if n, err := strconv.Atoi(vv); err == nil && n > 0 {
-					m[key] = n
-				}
-			}
-		}
-		mapping = m
-		cfg.Collector.ConcurrencyProfiles = mapping
-	}
+    // 获取档位映射（兼容旧格式与新格式）
+    mapping := make(map[string]ConcurrencyProfileConfig)
+    if len(cfg.Collector.ConcurrencyProfiles) > 0 {
+        for k, v := range cfg.Collector.ConcurrencyProfiles {
+            mapping[strings.ToUpper(k)] = v
+        }
+    } else {
+        raw := viper.Get("collector.concurrency_profiles")
+        switch rm := raw.(type) {
+        case map[string]interface{}:
+            for k, v := range rm {
+                key := strings.ToUpper(k)
+                switch vv := v.(type) {
+                case int:
+                    mapping[key] = ConcurrencyProfileConfig{Concurrent: vv}
+                case int64:
+                    mapping[key] = ConcurrencyProfileConfig{Concurrent: int(vv)}
+                case float64:
+                    mapping[key] = ConcurrencyProfileConfig{Concurrent: int(vv)}
+                case string:
+                    if n, err := strconv.Atoi(vv); err == nil && n > 0 {
+                        mapping[key] = ConcurrencyProfileConfig{Concurrent: n}
+                    }
+                case map[string]interface{}:
+                    var cp ConcurrencyProfileConfig
+                    if c, ok := vv["concurrent"]; ok {
+                        switch cv := c.(type) {
+                        case int:
+                            cp.Concurrent = cv
+                        case int64:
+                            cp.Concurrent = int(cv)
+                        case float64:
+                            cp.Concurrent = int(cv)
+                        case string:
+                            if n, err := strconv.Atoi(cv); err == nil { cp.Concurrent = n }
+                        }
+                    }
+                    if t, ok := vv["threads"]; ok {
+                        switch tv := t.(type) {
+                        case int:
+                            cp.Threads = tv
+                        case int64:
+                            cp.Threads = int(tv)
+                        case float64:
+                            cp.Threads = int(tv)
+                        case string:
+                            if n, err := strconv.Atoi(tv); err == nil { cp.Threads = n }
+                        }
+                    }
+                    mapping[key] = cp
+                }
+            }
+        case map[string]map[string]int:
+            for k, v := range rm {
+                key := strings.ToUpper(k)
+                cp := ConcurrencyProfileConfig{Concurrent: v["concurrent"], Threads: v["threads"]}
+                mapping[key] = cp
+            }
+        case map[string]int:
+            for k, v := range rm {
+                mapping[strings.ToUpper(k)] = ConcurrencyProfileConfig{Concurrent: v}
+            }
+        }
+        cfg.Collector.ConcurrencyProfiles = mapping
+    }
 
-	// 应用档位
-	if val, ok := mapping[p]; ok && val > 0 {
-		cfg.Collector.Concurrent = val
-	}
+    // 应用档位到 Collector.Concurrent/Threads
+    if profCfg, ok := mapping[p]; ok {
+        if profCfg.Concurrent > 0 {
+            cfg.Collector.Concurrent = profCfg.Concurrent
+        }
+        if profCfg.Threads > 0 {
+            cfg.Collector.Threads = profCfg.Threads
+        }
+    }
 }
 
 // GetServerAddr 获取服务器地址
@@ -372,15 +405,19 @@ type AutoInteractionConfig struct {
 
 // PlatformDefaultsConfig 设备平台默认参数（可在配置文件中扩展）
 type PlatformDefaultsConfig struct {
-	PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
-	DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
-	AutoInteractions  []AutoInteractionConfig `mapstructure:"auto_interactions"`
-	ErrorHints        []string                `mapstructure:"error_hints"`
-	SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
-	EnableRequired    bool                    `mapstructure:"enable_required"`
-	// 提权设置：当 enable_required 为 true 时，可指定提权命令与密码提示匹配
-	// enable_cli 定义提权命令（例如 "enable" 或 Linux 平台的 "sudo -i"）
-	// except_output 定义收到哪条输出后自动输入 enable 密码
-	EnableCLI          string `mapstructure:"enable_cli"`
-	EnableExceptOutput string `mapstructure:"except_output"`
+    PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
+    DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
+    AutoInteractions  []AutoInteractionConfig `mapstructure:"auto_interactions"`
+    ErrorHints        []string                `mapstructure:"error_hints"`
+    SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
+    EnableRequired    bool                    `mapstructure:"enable_required"`
+    // OutputFilter 平台级输出过滤（覆盖全局 collector.output_filter）
+    OutputFilter      OutputFilterConfig      `mapstructure:"output_filter"`
+    // Interact 平台级交互配置（包含自动交互、错误提示、大小写/空白匹配选项）
+    Interact          InteractConfig          `mapstructure:"interact"`
+    // 提权设置：当 enable_required 为 true 时，可指定提权命令与密码提示匹配
+    // enable_cli 定义提权命令（例如 "enable" 或 Linux 平台的 "sudo -i"）
+    // except_output 定义收到哪条输出后自动输入 enable 密码
+    EnableCLI          string `mapstructure:"enable_cli"`
+    EnableExceptOutput string `mapstructure:"except_output"`
 }

@@ -81,3 +81,7 @@ storage:
     username: "postgres"
     password: "postgres"
     database: "sshcollector_dev"
+
+# 格式化数据配置（仅定义 MinIO 路径前缀）
+data_format:
+  minio_prefix: "data-formats-dev"

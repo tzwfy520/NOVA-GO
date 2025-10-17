@@ -108,6 +108,7 @@ type StorageMeta struct {
     TaskID      string
     DeviceName  string
     DeviceIP    string
+    DevicePlatform string
     CommandSlug string
     Backend     string // local|minio
 }
@@ -195,8 +196,8 @@ func (w *LocalStorageWriter) Write(ctx context.Context, meta StorageMeta, conten
         }
     }
 
-    // 过滤输出（按配置）
-    filtered := applyLineFilter(w.cfg.Collector.OutputFilter, content)
+    // 过滤输出（按平台配置优先，回退到全局配置）
+    filtered := applyPlatformLineFilter(w.cfg, meta.DevicePlatform, content)
 
     // 文件名：命令 slug 或显式文件名（目录已带时分秒避免覆盖）
     // 若传入已包含扩展名，则不再追加 .txt
@@ -294,8 +295,8 @@ func (w *MinioStorageWriter) Write(ctx context.Context, meta StorageMeta, conten
         return StoredObject{}, fmt.Errorf("minio bucket not configured")
     }
 
-    // 过滤输出（按配置）
-    filtered := applyLineFilter(w.cfg.Collector.OutputFilter, content)
+    // 过滤输出（按平台配置优先，回退到全局配置）
+    filtered := applyPlatformLineFilter(w.cfg, meta.DevicePlatform, content)
 
     // 构造对象路径（使用 POSIX 风格，与本地一致）
     parts := []string{}
@@ -463,6 +464,35 @@ func applyLineFilter(f config.OutputFilterConfig, s string) string {
     return strings.Join(out, "\n")
 }
 
+// getOutputFilterForPlatform 返回平台对应的输出过滤配置；若平台未配置则回退 default 平台
+func getOutputFilterForPlatform(cfg *config.Config, platform string) config.OutputFilterConfig {
+    p := strings.ToLower(strings.TrimSpace(platform))
+    if p == "" { p = "default" }
+    dd, ok := cfg.Collector.DeviceDefaults[p]
+    if !ok {
+        if strings.HasPrefix(p, "huawei") { dd, ok = cfg.Collector.DeviceDefaults["huawei"] }
+        if !ok && strings.HasPrefix(p, "h3c") { dd, ok = cfg.Collector.DeviceDefaults["h3c"] }
+        if !ok && strings.HasPrefix(p, "cisco") { dd, ok = cfg.Collector.DeviceDefaults["cisco_ios"] }
+        if !ok && strings.HasPrefix(p, "linux") { dd, ok = cfg.Collector.DeviceDefaults["linux"] }
+    }
+    if ok {
+        if len(dd.OutputFilter.Prefixes) > 0 || len(dd.OutputFilter.Contains) > 0 {
+            return dd.OutputFilter
+        }
+    }
+    // 平台未命中时回退 default 平台
+    if def, ok := cfg.Collector.DeviceDefaults["default"]; ok {
+        return def.OutputFilter
+    }
+    // 无任何平台配置时回退为空过滤器（不改变输出）
+    return config.OutputFilterConfig{}
+}
+
+// applyPlatformLineFilter 根据设备平台选择过滤规则并应用
+func applyPlatformLineFilter(cfg *config.Config, platform string, s string) string {
+    return applyLineFilter(getOutputFilterForPlatform(cfg, platform), s)
+}
+
 var slugRe = regexp.MustCompile(`[^a-z0-9._-]+`)
 
 func slug(s string) string {
@@ -476,26 +506,33 @@ func slug(s string) string {
     return s
 }
 
-// BackupService 配置备份服务
+// BackupService 配置备份服务。
+// 交互说明：设备命令执行统一走 InteractBasic（交互优先、失败回退非交互逻辑已内联到 InteractBasic），包含平台预命令注入与结果过滤。
+// 职责边界：本服务仅做任务编排与存储写入；不参与预命令注入或输出过滤。
 type BackupService struct {
     config        *config.Config
     sshPool       *ssh.Pool
     running       bool
     workers       chan struct{}
-    exec          *ExecAdapter
+    interact      *InteractBasic
     storageWriter StorageWriter
 }
 
 // NewBackupService 创建备份服务
 func NewBackupService(cfg *config.Config) *BackupService {
+    conc := cfg.Collector.Concurrent
+    if conc <= 0 { conc = 1 }
+    threads := cfg.Collector.Threads
+    if threads <= 0 { threads = cfg.SSH.MaxSessions }
     poolConfig := &ssh.PoolConfig{
         MaxIdle:     10,
-        MaxActive:   cfg.Collector.Concurrent,
+        MaxActive:   conc,
         IdleTimeout: 5 * time.Minute,
         SSHConfig: &ssh.Config{
-            Timeout:     cfg.SSH.Timeout,
+            Timeout:        cfg.SSH.Timeout,
+            ConnectTimeout: cfg.SSH.ConnectTimeout,
             KeepAlive:   cfg.SSH.KeepAliveInterval,
-            MaxSessions: cfg.SSH.MaxSessions,
+            MaxSessions: threads,
         },
     }
 
@@ -503,8 +540,8 @@ func NewBackupService(cfg *config.Config) *BackupService {
     return &BackupService{
         config:        cfg,
         sshPool:       pool,
-        workers:       make(chan struct{}, cfg.Collector.Concurrent),
-        exec:          NewExecAdapter(pool, cfg),
+        workers:       make(chan struct{}, conc),
+        interact:      NewInteractBasic(cfg, pool),
         storageWriter: NewStorageWriter(cfg),
     }
 }
@@ -597,7 +634,19 @@ func (s *BackupService) ExecuteBatch(ctx context.Context, req *BackupBatchReques
                 TimeoutSec:      s.effectiveTimeout(req.Timeout, dev.DevicePlatform),
             }
 
-            results, err := s.exec.Execute(ctx, execReq, dev.CliList)
+            // 支持有限重试（请求优先，平台默认回退）
+            var results []*ssh.CommandResult
+            var err error
+            retries := s.effectiveRetries(req.RetryFlag, dev.DevicePlatform)
+            for attempt := 0; attempt <= retries; attempt++ {
+                results, err = s.interact.Execute(ctx, execReq, dev.CliList)
+                if err == nil {
+                    break
+                }
+                if attempt < retries {
+                    time.Sleep(300 * time.Millisecond)
+                }
+            }
             if err != nil {
                 resp.Success = false
                 resp.Error = err.Error()
@@ -630,6 +679,7 @@ func (s *BackupService) ExecuteBatch(ctx context.Context, req *BackupBatchReques
                         TaskID:       req.TaskID,
                         DeviceName:   dev.DeviceName,
                         DeviceIP:     dev.DeviceIP,
+                        DevicePlatform: dev.DevicePlatform,
                         CommandSlug:  r.Command,
                         Backend:      backend,
                     }
@@ -694,6 +744,7 @@ func (s *BackupService) ExecuteBatch(ctx context.Context, req *BackupBatchReques
                         TaskID:       req.TaskID,
                         DeviceName:   dev.DeviceName,
                         DeviceIP:     dev.DeviceIP,
+                        DevicePlatform: dev.DevicePlatform,
                         CommandSlug:  aggName,
                         Backend:      backend,
                     }
@@ -748,6 +799,15 @@ func (s *BackupService) effectiveTimeout(reqTimeout *int, platform string) int {
     d := getPlatformDefaults(strings.ToLower(strings.TrimSpace(func() string { if platform == "" { return "default" }; return platform }())))
     if d.Timeout > 0 { return d.Timeout }
     return 30
+}
+
+// effectiveRetries 计算有效重试次数：请求参数优先，其次平台默认，最后回退到 collector.retry_flags
+func (s *BackupService) effectiveRetries(reqRetries *int, platform string) int {
+    if reqRetries != nil && *reqRetries >= 0 { return *reqRetries }
+    d := getPlatformDefaults(strings.ToLower(strings.TrimSpace(func() string { if platform == "" { return "default" }; return platform }())))
+    if d.Retries > 0 { return d.Retries }
+    if s.config != nil && s.config.Collector.RetryFlags > 0 { return s.config.Collector.RetryFlags }
+    return 0
 }
 
 // isPreCommand 判断是否为平台级预处理命令（如 enable、关闭分页），这些命令不参与落盘

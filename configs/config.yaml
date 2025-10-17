@@ -4,9 +4,9 @@
 server:
   host: "0.0.0.0"
   port: 18000
-  mode: "release"  # debug, release, test
-  read_timeout: 30s
-  write_timeout: 30s
+  mode: "release"  # 运行模式：debug, release, test（影响Gin日志与恢复）
+  read_timeout: 60s  # 服务端读取请求头/体的超时；防止慢请求拖垮连接
+  write_timeout: 120s # 服务端写出响应的超时；建议≥批量任务最长执行窗口
 
 # 采集器配置
 collector:
@@ -14,45 +14,47 @@ collector:
   type: "ssh"
   version: "1.0.0"
   tags: ["production", "ssh"]
-  threads: 10
-  concurrent: 5
+  # 默认重试次数：接口未指定时使用
+  retry_flags: 1
   # 并发档位（优先级高于 concurrent）：可选 S/M/L/XL
   concurrency_profile: "S"
   # 并发档位映射：根据宿主机规格选择安全的并发数
   concurrency_profiles:
-    S: 8   # 2c4g 虚拟机规格
-    M: 16  # 4c8g 虚拟机规格
-    L: 32  # 8c16g 虚拟机规格
-    XL: 64 # 16c32g 虚拟机规格
-  # 原始输出过滤规则（按行移除）
-  output_filter:
-    # 前缀匹配：行以这些前缀开始则移除
-    prefixes:
-      - "---- More ----"
-      - "more"
-    # 包含匹配：行包含这些子串则移除
-    contains:
-      - "--more--"
-    # 可选：匹配前是否忽略大小写与去除首尾空格
-    case_insensitive: true
-    trim_space: true
-  # 交互配置：自动交互与错误提示
-  interact:
-    # 自动交互参数对：当输出包含 expect_output 时自动发送命令
-    auto_interactions:
-      - except_output: "do you want to save this config? yes/no"
-        command_auto_send: "yes"
-      - except_output: "do you want to reload this device? yes/no"
-        command_auto_send: "no"
-    # 命令错误提示：当设备输出以这些字符串开头时，标记命令错误
-    error_hints:
-      - "ERROR:"
-      - "invalid parameters detect"
-    # 匹配选项
-    case_insensitive: true
-    trim_space: true
+    S:    # 2c4g 虚拟机规格
+      concurrent: 8
+      threads: 32
+    M:    # 4c8g 虚拟机规格
+      concurrent: 16
+      threads: 64
+    L:    # 8c16g 虚拟机规格
+      concurrent: 32
+      threads: 128
+    XL:   # 16c32g 虚拟机规格
+      concurrent: 64
+      threads: 256
   # 设备平台默认参数：按平台注入 enable/分页关闭命令、提示符后缀与自动交互
   device_defaults:
+    # 通用兜底平台（当设备平台未配置时回退）
+    default:
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions:
+          - except_output: "do you want to save this config? yes/no"
+            command_auto_send: "yes"
+          - except_output: "do you want to reload this device? yes/no"
+            command_auto_send: "no"
+        error_hints:
+          - "ERROR:"
+          - "invalid parameters detect"
+        case_insensitive: true
+        trim_space: true
     cisco_ios:
       prompt_suffixes: [">", "#"]
       disable_paging_cmds: ["terminal length 0"]
@@ -64,63 +66,110 @@ collector:
       enable_cli: "enable"
       except_output: "Password:"
       skip_delayed_echo: true
-      error_hints:
-        - "invalid input detected"
-        - "incomplete command"
-        - "ambiguous command"
-        - "unknown command"
-        - "invalid autocommand"
-        - "line has invalid autocommand"
-      auto_interactions:
-        - except_output: "--more--"
-          command_auto_send: " "
-        - except_output: "more"
-          command_auto_send: " "
-        - except_output: "press any key"
-          command_auto_send: " "
-        - except_output: "confirm"
-          command_auto_send: "y"
-        - except_output: "[yes/no]"
-          command_auto_send: "yes"
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions:
+          - except_output: "--more--"
+            command_auto_send: " "
+          - except_output: "more"
+            command_auto_send: " "
+          - except_output: "press any key"
+            command_auto_send: " "
+          - except_output: "confirm"
+            command_auto_send: "y"
+          - except_output: "[yes/no]"
+            command_auto_send: "yes"
+        error_hints:
+          - "invalid input detected"
+          - "incomplete command"
+          - "ambiguous command"
+          - "unknown command"
+          - "invalid autocommand"
+          - "line has invalid autocommand"
+        case_insensitive: true
+        trim_space: true
     huawei:
       prompt_suffixes: [">", "#", "]"]
       disable_paging_cmds: ["screen-length disable"]
       enable_required: false
       skip_delayed_echo: true
-      error_hints:
-        - "error:"
-        - "unrecognized command"
-      auto_interactions:
-        - except_output: "more"
-          command_auto_send: " "
-        - except_output: "press any key"
-          command_auto_send: " "
-        - except_output: "confirm"
-          command_auto_send: "y"
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions:
+          - except_output: "more"
+            command_auto_send: " "
+          - except_output: "press any key"
+            command_auto_send: " "
+          - except_output: "confirm"
+            command_auto_send: "y"
+        error_hints:
+          - "error:"
+          - "unrecognized command"
+        case_insensitive: true
+        trim_space: true
     h3c:
       prompt_suffixes: [">", "#", "]"]
       disable_paging_cmds: ["screen-length disable"]
       enable_required: false
       skip_delayed_echo: true
-      error_hints:
-        - "error:"
-        - "unrecognized command"
-      auto_interactions:
-        - except_output: "more"
-          command_auto_send: " "
-        - except_output: "press any key"
-          command_auto_send: " "
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions:
+          - except_output: "more"
+            command_auto_send: " "
+          - except_output: "press any key"
+            command_auto_send: " "
+        error_hints:
+          - "error:"
+          - "unrecognized command"
+        case_insensitive: true
+        trim_space: true
     linux:
       prompt_suffixes: [">", "#", "$"]
       enable_required: true
       # 当需要提权时，设置提权命令与提示匹配
       # 示例：
-      enable_cli: "sudo -i"            # 交互模式下由TTY提示密码
-      except_output: "password"        # 更通用匹配，涵盖不同sudo提示样式
+      # 使用 -S 通过 stdin 输送密码；-p '' 关闭提示以减少干扰
+      enable_cli: "sudo -S -p '' -i"
+      # 保留通用密码提示匹配，以兼容不同发行版的提示样式
+      except_output: "password"
       skip_delayed_echo: true
-      error_hints:
-        - "incorrect password"
-        - "authentication failed"
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions: []
+        error_hints:
+          - "incorrect password"
+          - "authentication failed"
+        case_insensitive: true
+        trim_space: true
 
 # 数据库配置
 database:
@@ -133,7 +182,8 @@ database:
 
 # SSH配置
 ssh:
-  timeout: 30s
+  timeout: 30s          # 单设备执行窗口（含登陆与命令执行）；接口未指定时使用
+  connect_timeout: 10s  # 设备连接/登陆超时（拨号与握手）；超时即判定登陆失败
   keep_alive_interval: 10s
   max_sessions: 100
   
@@ -178,3 +228,7 @@ backup:
     prefix: ""               # 可选的局部前缀，最终路径 prefix/local.prefix/save_dir
     mkdir_if_missing: true
     compress: false
+
+# 格式化数据配置（仅定义 MinIO 路径前缀）
+data_format:
+  minio_prefix: "data-formats"

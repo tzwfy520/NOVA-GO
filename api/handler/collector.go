@@ -228,12 +228,15 @@ func (h *CollectorHandler) BatchExecute(c *gin.Context) {
     c.Status(http.StatusOK)
     enc := json.NewEncoder(c.Writer)
     enc.SetEscapeHTML(false)
+    encodeStart := time.Now()
     _ = enc.Encode(gin.H{
         "code":    "SUCCESS",
         "message": "批量任务执行完成",
         "data":    responses,
         "total":   len(responses),
     })
+    encodeDur := time.Since(encodeStart)
+    logger.Info("BatchExecute response encoded", "path", c.FullPath(), "size_bytes", c.Writer.Size(), "duration_ms", encodeDur.Milliseconds(), "count", len(responses))
 }
 
 // CustomerBatchRequest 自定义采集批量请求
@@ -405,7 +408,7 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 
     _ = g.Wait()
 
-    // 汇总成功/失败以确定顶层返回码
+    // 汇总成功/失败以确定顶层返回码（与备份接口保持一致）
     successCount := 0
     for _, r := range responses {
         if s, ok := r["success"].(bool); ok && s {
@@ -415,12 +418,15 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 
     respCode := "SUCCESS"
     respMsg := "自定义批量任务执行完成"
-    if successCount == 0 {
-        respCode = "FAILED"
-        respMsg = "自定义批量任务全部失败"
-    } else if successCount < len(responses) {
+    // 与备份接口对齐：全部或部分失败均返回 PARTIAL_SUCCESS，不返回 FAILED
+    if successCount < len(responses) {
+        // 包括 successCount == 0（全部失败）和部分成功
         respCode = "PARTIAL_SUCCESS"
-        respMsg = "自定义批量任务部分成功"
+        if successCount == 0 {
+            respMsg = "自定义批量任务全部失败"
+        } else {
+            respMsg = "自定义批量任务部分成功"
+        }
     }
 
     // 使用自定义编码器关闭 HTML 转义，避免 \u003c/\u003e 等转义影响原始输出可读性
@@ -428,12 +434,15 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
     c.Status(http.StatusOK)
     enc := json.NewEncoder(c.Writer)
     enc.SetEscapeHTML(false)
+    encodeStart := time.Now()
     _ = enc.Encode(gin.H{
         "code":    respCode,
         "message": respMsg,
         "data":    responses,
         "total":   len(responses),
     })
+    encodeDur := time.Since(encodeStart)
+    logger.Info("BatchExecuteCustomer response encoded", "path", c.FullPath(), "size_bytes", c.Writer.Size(), "duration_ms", encodeDur.Milliseconds(), "count", len(responses))
 }
 
 // BatchExecuteSystem 系统预制采集批量接口
@@ -578,17 +587,39 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 
     _ = g.Wait()
 
+    // 汇总成功/失败以确定顶层返回码（与备份接口保持一致）
+    successCount := 0
+    for _, r := range responses {
+        if s, ok := r["success"].(bool); ok && s {
+            successCount++
+        }
+    }
+
+    respCode := "SUCCESS"
+    respMsg := "系统预制批量任务执行完成"
+    if successCount < len(responses) {
+        respCode = "PARTIAL_SUCCESS"
+        if successCount == 0 {
+            respMsg = "系统预制批量任务全部失败"
+        } else {
+            respMsg = "系统预制批量任务部分成功"
+        }
+    }
+
     // 使用自定义编码器关闭 HTML 转义，保持原始输出可读性（如 <, > 不被 \u003c/\u003e）
     c.Header("Content-Type", "application/json")
     c.Status(http.StatusOK)
     enc := json.NewEncoder(c.Writer)
     enc.SetEscapeHTML(false)
+    encodeStart := time.Now()
     _ = enc.Encode(gin.H{
-        "code":    "SUCCESS",
-        "message": "系统预制批量任务执行完成",
+        "code":    respCode,
+        "message": respMsg,
         "data":    responses,
         "total":   len(responses),
     })
+    encodeDur := time.Since(encodeStart)
+    logger.Info("BatchExecuteSystem response encoded", "path", c.FullPath(), "size_bytes", c.Writer.Size(), "duration_ms", encodeDur.Milliseconds(), "count", len(responses))
 }
 
 // validateCollectRequest 验证采集请求参数

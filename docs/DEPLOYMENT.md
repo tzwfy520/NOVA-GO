@@ -164,6 +164,15 @@ dial tcp 142.250.217.81:443: i/o timeout
 GOPROXY=https://goproxy.cn,direct docker build -f deploy/Dockerfile -t sshcollector:latest .
 ```
 
+### 4. 交互统一入口与输出过滤
+
+为提升跨平台一致性，系统引入统一交互层（InteractBasic）：
+- 按设备平台自动注入预命令（如 `enable`、关闭分页），并在结果中自动过滤这些预命令输出；业务服务仅传递用户命令。
+- 应用统一的行级输出过滤（`collector.output_filter`），默认移除分页提示与噪声行。
+- 可通过 `collector.interact.auto_interactions` 与 `collector.interact.error_hints` 扩展自动交互与错误提示识别。
+
+注意：格式化服务（FormatService）不再执行内部预命令过滤，避免与交互层重复处理。
+
 ## 服务管理
 
 ### 启动服务
@@ -564,17 +573,18 @@ docker restart sshcollector-pro
 collector:
   # 档位：S/M/L/XL（也支持 "Concurrency-S" 形式）
   concurrency_profile: "S"
-  # 档位与并发数映射（可按需调整）
+  # 档位映射（并发 + 线程数）；threads 将覆盖 SSH 会话上限
   concurrency_profiles:
-    S: 8    # 2c4g
-    M: 16   # 4c8g
-    L: 32   # 8c16g
-    XL: 64  # 16c32g
+    S:   { concurrent: 8,  threads: 32 }   # 2c4g
+    M:   { concurrent: 16, threads: 64 }   # 4c8g
+    L:   { concurrent: 32, threads: 128 }  # 8c16g
+    XL:  { concurrent: 64, threads: 256 }  # 16c32g
   # 兼容老配置：若未设置档位，则使用 numeric 并发数
   concurrent: 5
 ```
 
 说明：
-- 档位会覆盖并发数，统一影响内部 `workers` 队列和 SSH 连接池的 `max_active`。
-- 服务器日志会输出当前应用的档位与并发度，便于运维核验。
-- 如需更保守或更激进的并发，可直接修改 `concurrency_profiles` 对应数值。
+- 档位会覆盖并发数（影响内部 `workers` 与连接池 `max_active`）。
+- 同时应用线程数（threads），用于覆盖 SSH 会话上限（`max_sessions`）。
+- 服务器日志会输出当前档位、实际并发与线程数，便于核验。
+- 如需更保守或更激进的并发，可直接修改 `concurrency_profiles` 对应并发与线程数。

@@ -74,6 +74,10 @@ storage:
     access_key: "${MINIO_ACCESS_KEY}"
     secret_key: "${MINIO_SECRET_KEY}"
     bucket: "sshcollector-raw"
+
+# 格式化数据配置（仅定义 MinIO 路径前缀）
+data_format:
+  minio_prefix: "data-formats"
     secure: false
   postgres:
     host: "postgres"
