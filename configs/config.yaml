@@ -67,6 +67,20 @@ collector:
       enable_cli: "enable"
       except_output: "Password:"
       skip_delayed_echo: true
+      # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
+      # timeout:
+      #   timeout_all: 60s
+      #   dial_timeout: 2
+      #   auth_timeout: 5
+      #   interact_timeout:
+      #     command_interval_ms: 120
+      #     command_timeout_sec: 30
+      #     quiet_after_ms: 800
+      #     quiet_poll_interval_ms: 250
+      #     prompt_inducer_interval_ms: 1000
+      #     prompt_inducer_max_count: 12
+      #     exit_pause_ms: 150
+      #     enable_password_fallback_ms: 1500
       output_filter:
         prefixes:
           - "---- More ----"
@@ -101,6 +115,20 @@ collector:
       config_mode_clis: ["system-view immediately", "system-view"]
       enable_required: false
       skip_delayed_echo: true
+      # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
+      # timeout:
+      #   timeout_all: 60s
+      #   dial_timeout: 2
+      #   auth_timeout: 5
+      #   interact_timeout:
+      #     command_interval_ms: 120
+      #     command_timeout_sec: 30
+      #     quiet_after_ms: 800
+      #     quiet_poll_interval_ms: 250
+      #     prompt_inducer_interval_ms: 1000
+      #     prompt_inducer_max_count: 12
+      #     exit_pause_ms: 150
+      #     enable_password_fallback_ms: 1500
       output_filter:
         prefixes:
           - "---- More ----"
@@ -128,6 +156,20 @@ collector:
       config_mode_clis: ["system-view immediately", "system-view"]
       enable_required: false
       skip_delayed_echo: true
+      # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
+      # timeout:
+      #   timeout_all: 60s
+      #   dial_timeout: 2
+      #   auth_timeout: 5
+      #   interact_timeout:
+      #     command_interval_ms: 120
+      #     command_timeout_sec: 30
+      #     quiet_after_ms: 800
+      #     quiet_poll_interval_ms: 250
+      #     prompt_inducer_interval_ms: 1000
+      #     prompt_inducer_max_count: 12
+      #     exit_pause_ms: 150
+      #     enable_password_fallback_ms: 1500
       output_filter:
         prefixes:
           - "---- More ----"
@@ -159,6 +201,20 @@ collector:
       # 保留通用密码提示匹配，以兼容不同发行版的提示样式
       except_output: "password"
       skip_delayed_echo: true
+      # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
+      # timeout:
+      #   timeout_all: 60s
+      #   dial_timeout: 2
+      #   auth_timeout: 5
+      #   interact_timeout:
+      #     command_interval_ms: 120
+      #     command_timeout_sec: 30
+      #     quiet_after_ms: 800
+      #     quiet_poll_interval_ms: 250
+      #     prompt_inducer_interval_ms: 1000
+      #     prompt_inducer_max_count: 12
+      #     exit_pause_ms: 150
+      #     enable_password_fallback_ms: 1500
       output_filter:
         prefixes:
           - "---- More ----"
@@ -174,6 +230,24 @@ collector:
           - "authentication failed"
         case_insensitive: true
         trim_space: true
+# SSH配置
+ssh:
+  keep_alive_interval: 15s
+  max_sessions: 100
+  # 全局 SSH 超时与交互节奏配置
+  timeout:
+    timeout_all: 60s         # 全局执行窗口（等价于 ssh.timeout）
+    dial_timeout: 2          # 拨号/握手阶段超时（原 connect_timeout 拆分）
+    auth_timeout: 5          # 认证阶段超时（原 connect_timeout 拆分）
+    interact_timeout:
+      command_interval_ms: 120
+      command_timeout_sec: 30
+      quiet_after_ms: 800
+      quiet_poll_interval_ms: 250
+      prompt_inducer_interval_ms: 1000
+      prompt_inducer_max_count: 12
+      exit_pause_ms: 150
+      enable_password_fallback_ms: 1500
 
 deploy:
   # 部署等待时间（毫秒），用于部署前后状态采集与下发后等待
@@ -188,14 +262,6 @@ database:
     max_open_conns: 100
     conn_max_lifetime: 3600s
 
-
-# SSH配置
-ssh:
-  timeout: 10s          # 单设备执行窗口（含登陆与命令执行）；接口未指定时使用
-  connect_timeout: 2s  # 设备连接/登陆超时（拨号与握手）；超时即判定登陆失败
-  keep_alive_interval: 15s
-  max_sessions: 100
-  
 
 # 日志配置
 log:

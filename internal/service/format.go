@@ -156,40 +156,44 @@ type FormatFastResponse struct {
 // 作用：负责并发调度、结果聚合与写入，不直接操作 SSH 客户端。
 
 type FormatService struct {
-    cfg         *config.Config
-    sshPool     *ssh.Pool
-    workers     chan struct{}
-    interact    *InteractBasic
-    minioWriter *FormatMinioWriter
-    running     bool
-    mutex       sync.RWMutex
+	cfg         *config.Config
+	sshPool     *ssh.Pool
+	workers     chan struct{}
+	interact    *InteractBasic
+	minioWriter *FormatMinioWriter
+	running     bool
+	mutex       sync.RWMutex
 }
 
 func NewFormatService(cfg *config.Config) *FormatService {
-    conc := cfg.Collector.Concurrent
-    if conc <= 0 { conc = 1 }
-    threads := cfg.Collector.Threads
-    if threads <= 0 { threads = cfg.SSH.MaxSessions }
-    poolConfig := &ssh.PoolConfig{
-        MaxIdle:     10,
-        MaxActive:   conc,
-        IdleTimeout: 5 * time.Minute,
-        SSHConfig: &ssh.Config{
-            Timeout:        cfg.SSH.Timeout,
-            ConnectTimeout: cfg.SSH.ConnectTimeout,
-            KeepAlive:   cfg.SSH.KeepAliveInterval,
-            MaxSessions: threads,
-        },
-    }
+	conc := cfg.Collector.Concurrent
+	if conc <= 0 {
+		conc = 1
+	}
+	threads := cfg.Collector.Threads
+	if threads <= 0 {
+		threads = cfg.SSH.MaxSessions
+	}
+	poolConfig := &ssh.PoolConfig{
+		MaxIdle:     10,
+		MaxActive:   conc,
+		IdleTimeout: 5 * time.Minute,
+		SSHConfig: &ssh.Config{
+			Timeout:        cfg.SSH.Timeout,
+			ConnectTimeout: cfg.SSH.ConnectTimeout,
+			KeepAlive:      cfg.SSH.KeepAliveInterval,
+			MaxSessions:    threads,
+		},
+	}
 
-    pool := ssh.NewPool(poolConfig)
-    return &FormatService{
-        cfg:         cfg,
-        sshPool:     pool,
-        workers:     make(chan struct{}, conc),
-        interact:    NewInteractBasic(cfg, pool),
-        minioWriter: NewFormatMinioWriter(cfg),
-    }
+	pool := ssh.NewPool(poolConfig)
+	return &FormatService{
+		cfg:         cfg,
+		sshPool:     pool,
+		workers:     make(chan struct{}, conc),
+		interact:    NewInteractBasic(cfg, pool),
+		minioWriter: NewFormatMinioWriter(cfg),
+	}
 }
 
 func (s *FormatService) Start(ctx context.Context) error {
@@ -287,25 +291,25 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 				return
 			}
 
-            // 执行采集（仅采集重试，解析仅在成功采集后进行一次）
-            timeout := s.effectiveTimeout(req.Timeout, dev.DevicePlatform)
-            // 默认回退：平台默认 -> collector.retry_flags
-            retries := s.effectiveRetries(req.RetryFlag, dev.DevicePlatform)
-            attempts := retries + 1
-            var res []*ssh.CommandResult
-            var err error
-            for try := 0; try < attempts; try++ {
-                res, err = s.interact.Execute(ctx, &ExecRequest{
-                    DeviceIP:        dev.DeviceIP,
-                    Port:            dev.DevicePort,
-                    DeviceName:      dev.DeviceName,
-                    DevicePlatform:  dev.DevicePlatform,
-                    CollectProtocol: dev.CollectProtocol,
-                    UserName:        dev.UserName,
-                    Password:        dev.Password,
-                    EnablePassword:  dev.EnablePassword,
-                    TimeoutSec:      timeout,
-                }, dev.CliList)
+			// 执行采集（仅采集重试，解析仅在成功采集后进行一次）
+			timeout := s.effectiveTimeout(req.Timeout, dev.DevicePlatform)
+			// 默认回退：平台默认 -> collector.retry_flags
+			retries := s.effectiveRetries(req.RetryFlag, dev.DevicePlatform)
+			attempts := retries + 1
+			var res []*ssh.CommandResult
+			var err error
+			for try := 0; try < attempts; try++ {
+				res, err = s.interact.Execute(ctx, &ExecRequest{
+					DeviceIP:        dev.DeviceIP,
+					Port:            dev.DevicePort,
+					DeviceName:      dev.DeviceName,
+					DevicePlatform:  dev.DevicePlatform,
+					CollectProtocol: dev.CollectProtocol,
+					UserName:        dev.UserName,
+					Password:        dev.Password,
+					EnablePassword:  dev.EnablePassword,
+					TimeoutSec:      timeout,
+				}, dev.CliList)
 				if err == nil {
 					break
 				}
@@ -321,8 +325,8 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 				}
 			}
 
-            // 统一交互层已过滤预命令与应用行过滤，此处直接使用结果
-            filtered := res
+			// 统一交互层已过滤预命令与应用行过滤，此处直接使用结果
+			filtered := res
 
 			// 统计/聚合失败命令
 			failedCmds := make([]string, 0)
@@ -520,25 +524,25 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 		}
 	}
 
-    // 执行采集（仅采集重试，解析仅在成功采集后进行一次）
-    timeout := s.effectiveTimeout(req.Timeout, dev.DevicePlatform)
-    // 默认回退：平台默认 -> collector.retry_flags
-    retries := s.effectiveRetries(req.RetryFlag, dev.DevicePlatform)
-    attempts := retries + 1
-    var res []*ssh.CommandResult
-    var err error
-    for try := 0; try < attempts; try++ {
-    res, err = s.interact.Execute(ctx, &ExecRequest{
-        DeviceIP:        dev.DeviceIP,
-        Port:            dev.DevicePort,
-        DeviceName:      dev.DeviceName,
-        DevicePlatform:  dev.DevicePlatform,
-        CollectProtocol: dev.CollectProtocol,
-        UserName:        dev.UserName,
-        Password:        dev.Password,
-        EnablePassword:  dev.EnablePassword,
-        TimeoutSec:      timeout,
-    }, userCmds)
+	// 执行采集（仅采集重试，解析仅在成功采集后进行一次）
+	timeout := s.effectiveTimeout(req.Timeout, dev.DevicePlatform)
+	// 默认回退：平台默认 -> collector.retry_flags
+	retries := s.effectiveRetries(req.RetryFlag, dev.DevicePlatform)
+	attempts := retries + 1
+	var res []*ssh.CommandResult
+	var err error
+	for try := 0; try < attempts; try++ {
+		res, err = s.interact.Execute(ctx, &ExecRequest{
+			DeviceIP:        dev.DeviceIP,
+			Port:            dev.DevicePort,
+			DeviceName:      dev.DeviceName,
+			DevicePlatform:  dev.DevicePlatform,
+			CollectProtocol: dev.CollectProtocol,
+			UserName:        dev.UserName,
+			Password:        dev.Password,
+			EnablePassword:  dev.EnablePassword,
+			TimeoutSec:      timeout,
+		}, userCmds)
 		if err == nil {
 			break
 		}
@@ -554,8 +558,8 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 		}
 	}
 
-    // 统一交互层已过滤预命令与应用行过滤，此处直接使用结果
-    filtered := res
+	// 统一交互层已过滤预命令与应用行过滤，此处直接使用结果
+	filtered := res
 
 	// 原始采集信息
 	rawViews := make([]CommandResultView, 0, len(filtered))
@@ -642,38 +646,38 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 }
 
 func (s *FormatService) effectiveTimeout(reqTimeout *int, platform string) int {
-    if reqTimeout != nil && *reqTimeout > 0 {
-        return *reqTimeout
-    }
-    d := getPlatformDefaults(strings.ToLower(strings.TrimSpace(func() string {
-        if platform == "" {
-            return "default"
-        }
-        return platform
-    }())))
-    if d.Timeout > 0 {
-        return d.Timeout
-    }
-    return 30
+	if reqTimeout != nil && *reqTimeout > 0 {
+		return *reqTimeout
+	}
+	d := getPlatformDefaults(strings.ToLower(strings.TrimSpace(func() string {
+		if platform == "" {
+			return "default"
+		}
+		return platform
+	}())))
+	if d.Timeout > 0 {
+		return d.Timeout
+	}
+	return 30
 }
 
 // effectiveRetries 计算有效重试次数：请求参数优先，其次平台默认，最后回退到 collector.retry_flags
 func (s *FormatService) effectiveRetries(reqRetries *int, platform string) int {
-    if reqRetries != nil && *reqRetries >= 0 {
-        return *reqRetries
-    }
-    p := strings.ToLower(strings.TrimSpace(platform))
-    if p == "" {
-        p = "default"
-    }
-    d := getPlatformDefaults(p)
-    if d.Retries > 0 {
-        return d.Retries
-    }
-    if s.cfg != nil && s.cfg.Collector.RetryFlags > 0 {
-        return s.cfg.Collector.RetryFlags
-    }
-    return 0
+	if reqRetries != nil && *reqRetries >= 0 {
+		return *reqRetries
+	}
+	p := strings.ToLower(strings.TrimSpace(platform))
+	if p == "" {
+		p = "default"
+	}
+	d := getPlatformDefaults(p)
+	if d.Retries > 0 {
+		return d.Retries
+	}
+	if s.cfg != nil && s.cfg.Collector.RetryFlags > 0 {
+		return s.cfg.Collector.RetryFlags
+	}
+	return 0
 }
 
 // 说明：预命令过滤已由统一交互层完成，FormatService 不再重复过滤

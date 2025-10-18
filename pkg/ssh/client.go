@@ -67,6 +67,14 @@ type InteractiveOptions struct {
     AutoInteractions  []AutoInteraction
     // 是否启用“延迟回显跳过”（提示符+上一条命令回显），按平台控制
     SkipDelayedEcho bool
+    // 新增：交互时序参数（可选，未设置则使用默认值）
+    QuietAfterMS              int // 静默完成阈值，默认800ms
+    QuietPollIntervalMS       int // 静默检测轮询间隔，默认250ms
+    PerCommandTimeoutSec      int // 单条命令超时，默认30s
+    EnablePasswordFallbackMS  int // enable密码提示未出现的回退发送延迟，默认1500ms
+    PromptInducerIntervalMS   int // 初始提示符诱发器间隔，默认1000ms
+    PromptInducerMaxCount     int // 初始提示符诱发器最大次数，默认12
+    ExitPauseMS               int // 退出命令发送间隔，默认150ms
 }
 
 // AutoInteraction 自动交互对
@@ -192,7 +200,7 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
     } else if c.config.ConnectTimeout > 0 {
         t := time.Now().Add(c.config.ConnectTimeout)
         _ = conn.SetDeadline(t)
-        usedDeadline = "ssh.connect_timeout"
+        usedDeadline = "ssh.timeout.dial+auth"
         deadlineTime = t
     } else {
         usedDeadline = "none"
@@ -200,7 +208,7 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
     if usedDeadline != "none" {
         logger.Debugf("SSH Connect: handshake deadline set via=%s deadline=%s", usedDeadline, deadlineTime.Format(time.RFC3339Nano))
     } else {
-        logger.Debug("SSH Connect: handshake deadline not set (no ctx deadline, no ssh.timeout)")
+        logger.Debug("SSH Connect: handshake deadline not set (no ctx deadline, no ssh.timeout.dial+auth)")
     }
 
     sshConn, chans, reqs, err := ssh.NewClientConn(conn, address, sshConfig)
@@ -580,21 +588,28 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 	// 发送 CRLF 促使设备输出当前提示符，便于后续检测（网络设备通常期望 CRLF）
     stdin.Write([]byte("\r\n"))
 
+    // 提示符诱发器参数（可调）
+    piInterval := time.Second
+    piMaxCount := 12
+    if opts != nil {
+        if opts.PromptInducerIntervalMS > 0 { piInterval = time.Duration(opts.PromptInducerIntervalMS) * time.Millisecond }
+        if opts.PromptInducerMaxCount > 0 { piMaxCount = opts.PromptInducerMaxCount }
+    }
 	// 提示符诱发器：在初始阶段定期发送 CRLF，帮助设备输出提示符
 	// 某些设备在建立 PTY 后需要键入回车才能显示提示符
 	stopTrigger := make(chan struct{})
 	go func() {
 		defer func() { recover() }()
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(piInterval)
 		defer ticker.Stop()
-		// 最多诱发 12 次（~12s），避免过度刷屏
+		// 最多诱发 piMaxCount 次，避免过度刷屏
 		count := 0
 		for {
 			select {
 			case <-stopTrigger:
 				return
 			case <-ticker.C:
-				if count >= 12 {
+				if count >= piMaxCount {
 					return
 				}
     stdin.Write([]byte("\r\n"))
@@ -813,12 +828,15 @@ StartCommands:
         // 静默阈值：若在看到内容后，持续 quietAfter 未再收到输出，则认为该命令完成
         // 选择较为保守的 800ms，避免在存在分页/慢速输出时误判
         quietAfter := 800 * time.Millisecond
+        if opts != nil && opts.QuietAfterMS > 0 {
+            quietAfter = time.Duration(opts.QuietAfterMS) * time.Millisecond
+        }
         // 自动交互仅命中一次（每条命令），触发后不再重复执行
         autoInteractDone := false
         // 针对提权命令的密码输入增加超时回退：若未检测到提示，按时发送一次
         enableFallbackSent := false
         var enableFallback <-chan time.Time
-        // 当 sudo 拒绝密码（"Sorry, try again."）时，允许用登录密码进行一次安全回退
+        // 当 sudo 拒绝密码（"Sorry, try again.") 时，允许用登录密码进行一次安全回退
         sorryRetryDone := false
         // 判断当前命令是否为提权命令
         isEnableCmd := func(curr string) bool {
@@ -832,8 +850,13 @@ StartCommands:
             // 回退：若未配置 EnableCLI，则默认识别 "enable"
             return strings.EqualFold(ctrim, "enable")
         }
+        // 启用 enable 密码回退发送延迟（可调）
+        fallbackDelay := 1500 * time.Millisecond
+        if opts != nil && opts.EnablePasswordFallbackMS > 0 {
+            fallbackDelay = time.Duration(opts.EnablePasswordFallbackMS) * time.Millisecond
+        }
         if opts != nil && opts.EnablePassword != "" && isEnableCmd(cmd) {
-            enableFallback = time.After(1500 * time.Millisecond)
+            enableFallback = time.After(fallbackDelay)
         }
         // 针对长输出命令（如 Cisco "show running-config"），禁用静默完成以避免只收首行
         isLongOutputCmd := func(curr string) bool {
@@ -841,6 +864,16 @@ StartCommands:
             return strings.HasPrefix(c, "show run") || strings.HasPrefix(c, "show running-config")
         }
         quietCompleteAllowed := !isLongOutputCmd(cmd)
+        // 静默检测轮询间隔（可调）
+        quietPoll := 250 * time.Millisecond
+        if opts != nil && opts.QuietPollIntervalMS > 0 {
+            quietPoll = time.Duration(opts.QuietPollIntervalMS) * time.Millisecond
+        }
+        // 单条命令超时（可调）
+        perCmdTimeout := 30 * time.Second
+        if opts != nil && opts.PerCommandTimeoutSec > 0 {
+            perCmdTimeout = time.Duration(opts.PerCommandTimeoutSec) * time.Second
+        }
         for {
             select {
             case <-ctx.Done():
@@ -1016,7 +1049,7 @@ StartCommands:
                 }
             // 静默完成检测：在已经读取到内容(sawContent)的情况下，如果持续一段时间未再收到输出，认为命令已完成
             // 该逻辑可以避免因提示符识别失败导致的“总是等到整体超时”问题
-            case <-time.After(250 * time.Millisecond):
+            case <-time.After(quietPoll):
                 if sawContent && time.Since(lastRecvAt) >= quietAfter {
                     // 针对长输出命令，禁止静默完成，避免在首行后短暂空档提前结束
                     if !quietCompleteAllowed {
@@ -1039,7 +1072,7 @@ StartCommands:
                 }
                 // 若未达到静默完成条件，继续等待
                 continue
-            case <-time.After(30 * time.Second):
+            case <-time.After(perCmdTimeout):
                 // 超时保护：将当前已读作为输出返回
                 results = append(results, &CommandResult{
                     Command:  cmd,
@@ -1048,7 +1081,7 @@ StartCommands:
                     ExitCode: -1,
                     Duration: time.Since(cmdStart),
                 })
-                logger.Debugf("SSH Interactive: per-command timeout reached (30s): %s", cmd)
+                logger.Debugf("SSH Interactive: per-command timeout reached (%s): %s", perCmdTimeout, cmd)
                 goto NextCmd
             }
         }
@@ -1070,8 +1103,13 @@ StartCommands:
 	}
 	for _, ec := range exitSeq {
     stdin.Write([]byte(ec + "\r\n"))
-		time.Sleep(150 * time.Millisecond)
-	}
+        // 退出命令发送间隔（可调）
+        exitPause := 150 * time.Millisecond
+        if opts != nil && opts.ExitPauseMS > 0 {
+            exitPause = time.Duration(opts.ExitPauseMS) * time.Millisecond
+        }
+        time.Sleep(exitPause)
+    }
 
 	stdin.Close()
 	// 等待读取协程结束

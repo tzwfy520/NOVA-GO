@@ -8,12 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
-
 	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
-	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
 	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
@@ -21,13 +16,13 @@ import (
 
 // CollectorService 采集器服务
 type CollectorService struct {
-    config  *config.Config
-    sshPool *ssh.Pool
-    interact *InteractBasic
-    mutex   sync.RWMutex
-    running bool
-    tasks   map[string]*TaskContext
-    workers chan struct{}
+	config   *config.Config
+	sshPool  *ssh.Pool
+	interact *InteractBasic
+	mutex    sync.RWMutex
+	running  bool
+	tasks    map[string]*TaskContext
+	workers  chan struct{}
 }
 
 // TaskContext 任务上下文
@@ -71,79 +66,192 @@ type CollectResponse struct {
 
 // 内置交互默认值结构（替代原 addone/interact）
 type platformInteractDefaults struct {
-    Timeout           int
-    Retries           int
-    Threads           int
-    Concurrent        int
-    PromptSuffixes    []string
-    CommandIntervalMS int
-    AutoInteractions  []struct{ ExpectOutput, AutoSend string }
-    ErrorHints        []string
-    SkipDelayedEcho   bool
-    // 交互匹配选项（平台 interact 配置）
-    InteractCaseInsensitive bool
-    InteractTrimSpace       bool
+	Timeout           int
+	Retries           int
+	Threads           int
+	Concurrent        int
+	PromptSuffixes    []string
+	CommandIntervalMS int
+	AutoInteractions  []struct{ ExpectOutput, AutoSend string }
+	ErrorHints        []string
+	SkipDelayedEcho   bool
+	// 交互匹配选项（平台 interact 配置）
+	InteractCaseInsensitive bool
+	InteractTrimSpace       bool
+	// 新增：交互时序与节奏参数
+	CommandTimeoutSec        int
+	QuietAfterMS             int
+	QuietPollIntervalMS      int
+	EnablePasswordFallbackMS int
+	PromptInducerIntervalMS  int
+	PromptInducerMaxCount    int
+	ExitPauseMS              int
 }
 
 // getPlatformDefaults 仅从配置读取平台默认，若平台缺失则兜底使用 default
 func getPlatformDefaults(platform string) platformInteractDefaults {
-    p := strings.TrimSpace(strings.ToLower(platform))
-    base := platformInteractDefaults{}
-    if cfg := config.Get(); cfg != nil {
-        if dd, ok := cfg.Collector.DeviceDefaults[p]; ok {
-            if len(dd.PromptSuffixes) > 0 { base.PromptSuffixes = dd.PromptSuffixes }
-            base.SkipDelayedEcho = dd.SkipDelayedEcho
-            // 优先使用平台嵌套 interact，其次兼容旧字段
-            if len(dd.Interact.ErrorHints) > 0 { base.ErrorHints = dd.Interact.ErrorHints } else if len(dd.ErrorHints) > 0 { base.ErrorHints = dd.ErrorHints }
-            if len(dd.Interact.AutoInteractions) > 0 {
-                mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.Interact.AutoInteractions))
-                for _, ai := range dd.Interact.AutoInteractions {
-                    eo := strings.TrimSpace(ai.ExpectOutput)
-                    as := strings.TrimSpace(ai.AutoSend)
-                    if eo == "" || as == "" { continue }
-                    mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
-                }
-                if len(mapped) > 0 { base.AutoInteractions = mapped }
-            } else if len(dd.AutoInteractions) > 0 {
-                mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.AutoInteractions))
-                for _, ai := range dd.AutoInteractions {
-                    eo := strings.TrimSpace(ai.ExpectOutput)
-                    as := strings.TrimSpace(ai.AutoSend)
-                    if eo == "" || as == "" { continue }
-                    mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
-                }
-                if len(mapped) > 0 { base.AutoInteractions = mapped }
-            }
-            base.InteractCaseInsensitive = dd.Interact.CaseInsensitive
-            base.InteractTrimSpace = dd.Interact.TrimSpace
-        } else if dd, ok := cfg.Collector.DeviceDefaults["default"]; ok {
-            if len(dd.PromptSuffixes) > 0 { base.PromptSuffixes = dd.PromptSuffixes }
-            base.SkipDelayedEcho = dd.SkipDelayedEcho
-            if len(dd.Interact.ErrorHints) > 0 { base.ErrorHints = dd.Interact.ErrorHints } else if len(dd.ErrorHints) > 0 { base.ErrorHints = dd.ErrorHints }
-            if len(dd.Interact.AutoInteractions) > 0 {
-                mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.Interact.AutoInteractions))
-                for _, ai := range dd.Interact.AutoInteractions {
-                    eo := strings.TrimSpace(ai.ExpectOutput)
-                    as := strings.TrimSpace(ai.AutoSend)
-                    if eo == "" || as == "" { continue }
-                    mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
-                }
-                if len(mapped) > 0 { base.AutoInteractions = mapped }
-            } else if len(dd.AutoInteractions) > 0 {
-                mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.AutoInteractions))
-                for _, ai := range dd.AutoInteractions {
-                    eo := strings.TrimSpace(ai.ExpectOutput)
-                    as := strings.TrimSpace(ai.AutoSend)
-                    if eo == "" || as == "" { continue }
-                    mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
-                }
-                if len(mapped) > 0 { base.AutoInteractions = mapped }
-            }
-            base.InteractCaseInsensitive = dd.Interact.CaseInsensitive
-            base.InteractTrimSpace = dd.Interact.TrimSpace
-        }
-    }
-    return base
+	p := strings.TrimSpace(strings.ToLower(platform))
+	base := platformInteractDefaults{}
+	if cfg := config.Get(); cfg != nil {
+		if dd, ok := cfg.Collector.DeviceDefaults[p]; ok {
+			// 平台超时（优先使用嵌套 timeout.timeout_all）
+			if dd.Timeout.TimeoutAll > 0 {
+				base.Timeout = int(dd.Timeout.TimeoutAll.Seconds())
+			}
+			if len(dd.PromptSuffixes) > 0 {
+				base.PromptSuffixes = dd.PromptSuffixes
+			}
+			base.SkipDelayedEcho = dd.SkipDelayedEcho
+			// 优先使用平台嵌套 interact，其次兼容旧字段
+			if len(dd.Interact.ErrorHints) > 0 {
+				base.ErrorHints = dd.Interact.ErrorHints
+			} else if len(dd.ErrorHints) > 0 {
+				base.ErrorHints = dd.ErrorHints
+			}
+			if len(dd.Interact.AutoInteractions) > 0 {
+				mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.Interact.AutoInteractions))
+				for _, ai := range dd.Interact.AutoInteractions {
+					eo := strings.TrimSpace(ai.ExpectOutput)
+					as := strings.TrimSpace(ai.AutoSend)
+					if eo == "" || as == "" {
+						continue
+					}
+					mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
+				}
+				if len(mapped) > 0 {
+					base.AutoInteractions = mapped
+				}
+			}
+			base.InteractCaseInsensitive = dd.Interact.CaseInsensitive
+			base.InteractTrimSpace = dd.Interact.TrimSpace
+			// 节奏与时序参数（优先使用平台 timeout.interact_timeout 块）
+			if dd.Timeout.Interact.CommandIntervalMS > 0 {
+				base.CommandIntervalMS = dd.Timeout.Interact.CommandIntervalMS
+			} else if dd.CommandIntervalMS > 0 {
+				base.CommandIntervalMS = dd.CommandIntervalMS
+			}
+			if dd.Timeout.Interact.CommandTimeoutSec > 0 {
+				base.CommandTimeoutSec = dd.Timeout.Interact.CommandTimeoutSec
+			} else if dd.CommandTimeoutSec > 0 {
+				base.CommandTimeoutSec = dd.CommandTimeoutSec
+			}
+			if dd.Timeout.Interact.QuietAfterMS > 0 {
+				base.QuietAfterMS = dd.Timeout.Interact.QuietAfterMS
+			} else if dd.QuietAfterMS > 0 {
+				base.QuietAfterMS = dd.QuietAfterMS
+			}
+			if dd.Timeout.Interact.QuietPollIntervalMS > 0 {
+				base.QuietPollIntervalMS = dd.Timeout.Interact.QuietPollIntervalMS
+			} else if dd.QuietPollIntervalMS > 0 {
+				base.QuietPollIntervalMS = dd.QuietPollIntervalMS
+			}
+			if dd.Timeout.Interact.EnablePasswordFallbackMS > 0 {
+				base.EnablePasswordFallbackMS = dd.Timeout.Interact.EnablePasswordFallbackMS
+			} else if dd.EnablePasswordFallbackMS > 0 {
+				base.EnablePasswordFallbackMS = dd.EnablePasswordFallbackMS
+			}
+			if dd.Timeout.Interact.PromptInducerIntervalMS > 0 {
+				base.PromptInducerIntervalMS = dd.Timeout.Interact.PromptInducerIntervalMS
+			} else if dd.PromptInducerIntervalMS > 0 {
+				base.PromptInducerIntervalMS = dd.PromptInducerIntervalMS
+			}
+			if dd.Timeout.Interact.PromptInducerMaxCount > 0 {
+				base.PromptInducerMaxCount = dd.Timeout.Interact.PromptInducerMaxCount
+			} else if dd.PromptInducerMaxCount > 0 {
+				base.PromptInducerMaxCount = dd.PromptInducerMaxCount
+			}
+			if dd.Timeout.Interact.ExitPauseMS > 0 {
+				base.ExitPauseMS = dd.Timeout.Interact.ExitPauseMS
+			} else if dd.ExitPauseMS > 0 {
+				base.ExitPauseMS = dd.ExitPauseMS
+			}
+		} else if dd, ok := cfg.Collector.DeviceDefaults["default"]; ok {
+			// 平台未命中时，使用 default 平台的配置与嵌套 timeout
+			if dd.Timeout.TimeoutAll > 0 {
+				base.Timeout = int(dd.Timeout.TimeoutAll.Seconds())
+			}
+			if len(dd.PromptSuffixes) > 0 {
+				base.PromptSuffixes = dd.PromptSuffixes
+			}
+			base.SkipDelayedEcho = dd.SkipDelayedEcho
+			if len(dd.Interact.ErrorHints) > 0 {
+				base.ErrorHints = dd.Interact.ErrorHints
+			} else if len(dd.ErrorHints) > 0 {
+				base.ErrorHints = dd.ErrorHints
+			}
+			if len(dd.Interact.AutoInteractions) > 0 {
+				mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.Interact.AutoInteractions))
+				for _, ai := range dd.Interact.AutoInteractions {
+					eo := strings.TrimSpace(ai.ExpectOutput)
+					as := strings.TrimSpace(ai.AutoSend)
+					if eo == "" || as == "" {
+						continue
+					}
+					mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
+				}
+				if len(mapped) > 0 {
+					base.AutoInteractions = mapped
+				}
+			} else if len(dd.AutoInteractions) > 0 {
+				mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.AutoInteractions))
+				for _, ai := range dd.AutoInteractions {
+					eo := strings.TrimSpace(ai.ExpectOutput)
+					as := strings.TrimSpace(ai.AutoSend)
+					if eo == "" || as == "" {
+						continue
+					}
+					mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
+				}
+				if len(mapped) > 0 {
+					base.AutoInteractions = mapped
+				}
+			}
+			base.InteractCaseInsensitive = dd.Interact.CaseInsensitive
+			base.InteractTrimSpace = dd.Interact.TrimSpace
+			// 节奏与时序参数（default；优先嵌套）
+			if dd.Timeout.Interact.CommandIntervalMS > 0 {
+				base.CommandIntervalMS = dd.Timeout.Interact.CommandIntervalMS
+			} else if dd.CommandIntervalMS > 0 {
+				base.CommandIntervalMS = dd.CommandIntervalMS
+			}
+			if dd.Timeout.Interact.CommandTimeoutSec > 0 {
+				base.CommandTimeoutSec = dd.Timeout.Interact.CommandTimeoutSec
+			} else if dd.CommandTimeoutSec > 0 {
+				base.CommandTimeoutSec = dd.CommandTimeoutSec
+			}
+			if dd.Timeout.Interact.QuietAfterMS > 0 {
+				base.QuietAfterMS = dd.Timeout.Interact.QuietAfterMS
+			} else if dd.QuietAfterMS > 0 {
+				base.QuietAfterMS = dd.QuietAfterMS
+			}
+			if dd.Timeout.Interact.QuietPollIntervalMS > 0 {
+				base.QuietPollIntervalMS = dd.Timeout.Interact.QuietPollIntervalMS
+			} else if dd.QuietPollIntervalMS > 0 {
+				base.QuietPollIntervalMS = dd.QuietPollIntervalMS
+			}
+			if dd.Timeout.Interact.EnablePasswordFallbackMS > 0 {
+				base.EnablePasswordFallbackMS = dd.Timeout.Interact.EnablePasswordFallbackMS
+			} else if dd.EnablePasswordFallbackMS > 0 {
+				base.EnablePasswordFallbackMS = dd.EnablePasswordFallbackMS
+			}
+			if dd.Timeout.Interact.PromptInducerIntervalMS > 0 {
+				base.PromptInducerIntervalMS = dd.Timeout.Interact.PromptInducerIntervalMS
+			} else if dd.PromptInducerIntervalMS > 0 {
+				base.PromptInducerIntervalMS = dd.PromptInducerIntervalMS
+			}
+			if dd.Timeout.Interact.PromptInducerMaxCount > 0 {
+				base.PromptInducerMaxCount = dd.Timeout.Interact.PromptInducerMaxCount
+			} else if dd.PromptInducerMaxCount > 0 {
+				base.PromptInducerMaxCount = dd.PromptInducerMaxCount
+			}
+			if dd.Timeout.Interact.ExitPauseMS > 0 {
+				base.ExitPauseMS = dd.Timeout.Interact.ExitPauseMS
+			} else if dd.ExitPauseMS > 0 {
+				base.ExitPauseMS = dd.ExitPauseMS
+			}
+		}
+	}
+	return base
 }
 
 // 已移除：平台默认系统采集命令逻辑
@@ -160,31 +268,35 @@ type CommandResultView struct {
 
 // NewCollectorService 创建采集器服务
 func NewCollectorService(cfg *config.Config) *CollectorService {
-    // 创建SSH连接池配置
-    // 并发与线程均由配置/档位应用后的最终值决定
-    conc := cfg.Collector.Concurrent
-    if conc <= 0 { conc = 1 }
-    threads := cfg.Collector.Threads
-    if threads <= 0 { threads = cfg.SSH.MaxSessions }
-    poolConfig := &ssh.PoolConfig{
-        MaxIdle:     10,
-        MaxActive:   conc,
-        IdleTimeout: 5 * time.Minute,
-        SSHConfig: &ssh.Config{
-            Timeout:        cfg.SSH.Timeout,
-            ConnectTimeout: cfg.SSH.ConnectTimeout,
-            KeepAlive:   cfg.SSH.KeepAliveInterval,
-            MaxSessions: threads,
-        },
-    }
-    pool := ssh.NewPool(poolConfig)
-    return &CollectorService{
-        config:   cfg,
-        sshPool:  pool,
-        interact: NewInteractBasic(cfg, pool),
-        tasks:    make(map[string]*TaskContext),
-        workers:  make(chan struct{}, conc),
-    }
+	// 创建SSH连接池配置
+	// 并发与线程均由配置/档位应用后的最终值决定
+	conc := cfg.Collector.Concurrent
+	if conc <= 0 {
+		conc = 1
+	}
+	threads := cfg.Collector.Threads
+	if threads <= 0 {
+		threads = cfg.SSH.MaxSessions
+	}
+	poolConfig := &ssh.PoolConfig{
+		MaxIdle:     10,
+		MaxActive:   conc,
+		IdleTimeout: 5 * time.Minute,
+		SSHConfig: &ssh.Config{
+			Timeout:        cfg.SSH.Timeout,
+			ConnectTimeout: cfg.SSH.ConnectTimeout,
+			KeepAlive:      cfg.SSH.KeepAliveInterval,
+			MaxSessions:    threads,
+		},
+	}
+	pool := ssh.NewPool(poolConfig)
+	return &CollectorService{
+		config:   cfg,
+		sshPool:  pool,
+		interact: NewInteractBasic(cfg, pool),
+		tasks:    make(map[string]*TaskContext),
+		workers:  make(chan struct{}, conc),
+	}
 }
 
 // Start 启动采集器服务
@@ -259,14 +371,14 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 	} else if interactDefaults.Timeout > 0 {
 		effTimeout = interactDefaults.Timeout
 	}
-    effRetries := 0
-    if request.RetryFlag != nil && *request.RetryFlag >= 0 {
-        effRetries = *request.RetryFlag
-    } else if interactDefaults.Retries > 0 {
-        effRetries = interactDefaults.Retries
-    } else if s.config != nil && s.config.Collector.RetryFlags > 0 {
-        effRetries = s.config.Collector.RetryFlags
-    }
+	effRetries := 0
+	if request.RetryFlag != nil && *request.RetryFlag >= 0 {
+		effRetries = *request.RetryFlag
+	} else if interactDefaults.Retries > 0 {
+		effRetries = interactDefaults.Retries
+	} else if s.config != nil && s.config.Collector.RetryFlags > 0 {
+		effRetries = s.config.Collector.RetryFlags
+	}
 
 	// 获取工作协程：使用基于有效超时的内部等待上下文，避免HTTP上下文过早结束
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Duration(effTimeout)*time.Second)
@@ -434,156 +546,174 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 
 // executeSSHCollection 执行SSH采集
 func (s *CollectorService) executeSSHCollection(ctx context.Context, request *CollectRequest, commands []string, retries int) ([]*CommandResultView, error) {
-    // 记录开始日志
-    port := request.Port
-    if port < 1 || port > 65535 { port = 22 }
-    s.logTaskInfo(request.TaskID, fmt.Sprintf("Starting SSH collection for %s:%d", request.DeviceIP, port))
+	// 记录开始日志
+	port := request.Port
+	if port < 1 || port > 65535 {
+		port = 22
+	}
+	s.logTaskInfo(request.TaskID, fmt.Sprintf("Starting SSH collection for %s:%d", request.DeviceIP, port))
 
-    // 计算有效超时（与 ExecuteTask 逻辑保持一致）
-    effTimeoutSec := 30
-    if request.Timeout != nil && *request.Timeout > 0 {
-        effTimeoutSec = *request.Timeout
-    } else {
-        p := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
-        platformKey := p
-        if platformKey == "" {
-            platformKey = "default"
-        }
-        d := getPlatformDefaults(platformKey)
-        if d.Timeout > 0 { effTimeoutSec = d.Timeout }
-    }
-    // 统一交互入口：通过 InteractBasic 执行并完成预命令与行过滤
-    execReq := &ExecRequest{
-        DeviceIP:        request.DeviceIP,
-        Port:            port,
-        DeviceName:      request.DeviceName,
-        DevicePlatform:  request.DevicePlatform,
-        CollectProtocol: request.CollectProtocol,
-        UserName:        request.UserName,
-        Password:        request.Password,
-        EnablePassword:  request.EnablePassword,
-        TimeoutSec:      effTimeoutSec,
-    }
+	// 计算有效超时（与 ExecuteTask 逻辑保持一致）
+	effTimeoutSec := 30
+	if request.Timeout != nil && *request.Timeout > 0 {
+		effTimeoutSec = *request.Timeout
+	} else {
+		p := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
+		platformKey := p
+		if platformKey == "" {
+			platformKey = "default"
+		}
+		d := getPlatformDefaults(platformKey)
+		if d.Timeout > 0 {
+			effTimeoutSec = d.Timeout
+		}
+	}
+	// 统一交互入口：通过 InteractBasic 执行并完成预命令与行过滤
+	execReq := &ExecRequest{
+		DeviceIP:        request.DeviceIP,
+		Port:            port,
+		DeviceName:      request.DeviceName,
+		DevicePlatform:  request.DevicePlatform,
+		CollectProtocol: request.CollectProtocol,
+		UserName:        request.UserName,
+		Password:        request.Password,
+		EnablePassword:  request.EnablePassword,
+		TimeoutSec:      effTimeoutSec,
+	}
 
-    // 使用请求中的 retries 参数进行重试（至少执行一次）
-    attempts := retries
-    if attempts < 0 { attempts = 0 }
-    maxAttempts := attempts + 1
-    var rawResults []*ssh.CommandResult
-    var err error
-    for i := 0; i < maxAttempts; i++ {
-        rawResults, err = s.interact.Execute(ctx, execReq, commands)
-        if err == nil {
-            if i > 0 {
-                s.logTaskInfo(request.TaskID, fmt.Sprintf("Retry successful on attempt %d/%d", i+1, maxAttempts))
-            }
-            break
-        }
-        s.logTaskWarn(request.TaskID, fmt.Sprintf("Attempt %d/%d failed: %v", i+1, maxAttempts, err))
-        // 若上下文已取消或达到最大重试次数则退出
-        if ctx.Err() != nil || i >= attempts {
-            break
-        }
-        // 轻微退避，避免立即重试造成设备压力
-        time.Sleep(time.Duration(150*(i+1)) * time.Millisecond)
-    }
-    if err != nil {
-        return nil, err
-    }
-    // 记录成功日志
-    s.logTaskInfo(request.TaskID, fmt.Sprintf("SSH collection completed, executed %d commands", len(rawResults)))
+	// 使用请求中的 retries 参数进行重试（至少执行一次）
+	attempts := retries
+	if attempts < 0 {
+		attempts = 0
+	}
+	maxAttempts := attempts + 1
+	var rawResults []*ssh.CommandResult
+	var err error
+	for i := 0; i < maxAttempts; i++ {
+		rawResults, err = s.interact.Execute(ctx, execReq, commands)
+		if err == nil {
+			if i > 0 {
+				s.logTaskInfo(request.TaskID, fmt.Sprintf("Retry successful on attempt %d/%d", i+1, maxAttempts))
+			}
+			break
+		}
+		s.logTaskWarn(request.TaskID, fmt.Sprintf("Attempt %d/%d failed: %v", i+1, maxAttempts, err))
+		// 若上下文已取消或达到最大重试次数则退出
+		if ctx.Err() != nil || i >= attempts {
+			break
+		}
+		// 轻微退避，避免立即重试造成设备压力
+		time.Sleep(time.Duration(150*(i+1)) * time.Millisecond)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// 记录成功日志
+	s.logTaskInfo(request.TaskID, fmt.Sprintf("SSH collection completed, executed %d commands", len(rawResults)))
 
-    // 格式化解析
-    platform := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
-    if platform == "" { platform = "default" }
+	// 格式化解析
+	platform := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
+	if platform == "" {
+		platform = "default"
+	}
 
-    // 输出结果直接使用实际执行命令，避免与请求索引错位
-    out := make([]*CommandResultView, 0, len(rawResults))
-    // 解析模式：不再依赖 origin，改为从 metadata.collect_mode 派生
-    collectMode := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", request.Metadata["collect_mode"])))
-    if collectMode == "" {
-        collectMode = "customer"
-    }
-    for _, r := range rawResults {
-        // 防御式：r 可能为 nil（例如连接被 keepalive 标记为断开导致 ExecuteCommand 返回 nil）
-        cmdVal := ""
-        if r != nil {
-            cmdVal = strings.TrimSpace(r.Command)
-        }
-        displayCmd := cmdVal
-        if displayCmd == "" {
-            displayCmd = "<unknown>"
-        }
-        // 当前不进行结构化解析，保持空数组以兼容 API 字段
-        var fmtRows interface{} = []map[string]interface{}{}
-        // 错误提示检测：如配置了 error_hints，当输出行以提示前缀开头时标记错误
-        detectedErr := ""
-        if r != nil && r.Error == "" && collectMode != "customer" {
-            // 错误提示基于平台/默认平台配置，不再叠加全局
-            defaults := getPlatformDefaults(platform)
-            hints := defaults.ErrorHints
-            if len(hints) > 0 {
-                raw := r.Output
-                lines := strings.Split(raw, "\n")
-                for _, ln := range lines {
-                    t := ln
-                    if defaults.InteractTrimSpace { t = strings.TrimSpace(t) }
-                    cmp := t
-                    if defaults.InteractCaseInsensitive { cmp = strings.ToLower(cmp) }
-                    for _, h := range hints {
-                        hh := h
-                        if defaults.InteractTrimSpace { hh = strings.TrimSpace(hh) }
-                        if defaults.InteractCaseInsensitive { hh = strings.ToLower(hh) }
-                        if hh != "" && strings.HasPrefix(cmp, hh) {
-                            detectedErr = fmt.Sprintf("command error hint matched: %s", t)
-                            break
-                        }
-                    }
-                    if detectedErr != "" { break }
-                }
-            }
-        }
-        // 如命中了错误提示，记录任务警告日志（非致命）
-        if detectedErr != "" {
-            s.logTaskWarn(request.TaskID, fmt.Sprintf("command hint matched for %q: %s", displayCmd, detectedErr))
-        }
-        // 计算过滤统计与错误传播标记
-        var rawStripped string
-        var beforeLines, afterLines int
-        var exitCodeVal int
-        var durationMsVal int64
-        var errorVal string
-        propagated := false
-        if r != nil {
-            // 输出已由统一入口过滤，这里直接使用
-            rawStripped = r.Output
-            beforeLines = len(strings.Split(r.Output, "\n"))
-            afterLines = len(strings.Split(rawStripped, "\n"))
-            exitCodeVal = r.ExitCode
-            durationMsVal = int64(r.Duration / time.Millisecond)
-            if r.Error != "" {
-                errorVal = r.Error
-            } else if detectedErr != "" {
-                errorVal = detectedErr
-            }
-        } else {
-            exitCodeVal = -1
-            durationMsVal = 0
-            rawStripped = ""
-        }
-        view := &CommandResultView{
-            Command:      displayCmd,
-            RawOutput:    rawStripped,
-            FormatOutput: fmtRows,
-            Error:        errorVal,
-            ExitCode:     exitCodeVal,
-            DurationMS:   durationMsVal,
-        }
-        logger.Debugf("Collector output filter: cmd=%q lines_before=%d lines_after=%d exit=%d dur_ms=%d error_propagated=%v", displayCmd, beforeLines, afterLines, exitCodeVal, durationMsVal, propagated)
-        out = append(out, view)
-    }
+	// 输出结果直接使用实际执行命令，避免与请求索引错位
+	out := make([]*CommandResultView, 0, len(rawResults))
+	// 解析模式：不再依赖 origin，改为从 metadata.collect_mode 派生
+	collectMode := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", request.Metadata["collect_mode"])))
+	if collectMode == "" {
+		collectMode = "customer"
+	}
+	for _, r := range rawResults {
+		// 防御式：r 可能为 nil（例如连接被 keepalive 标记为断开导致 ExecuteCommand 返回 nil）
+		cmdVal := ""
+		if r != nil {
+			cmdVal = strings.TrimSpace(r.Command)
+		}
+		displayCmd := cmdVal
+		if displayCmd == "" {
+			displayCmd = "<unknown>"
+		}
+		// 当前不进行结构化解析，保持空数组以兼容 API 字段
+		var fmtRows interface{} = []map[string]interface{}{}
+		// 错误提示检测：如配置了 error_hints，当输出行以提示前缀开头时标记错误
+		detectedErr := ""
+		if r != nil && r.Error == "" && collectMode != "customer" {
+			// 错误提示基于平台/默认平台配置，不再叠加全局
+			defaults := getPlatformDefaults(platform)
+			hints := defaults.ErrorHints
+			if len(hints) > 0 {
+				raw := r.Output
+				lines := strings.Split(raw, "\n")
+				for _, ln := range lines {
+					t := ln
+					if defaults.InteractTrimSpace {
+						t = strings.TrimSpace(t)
+					}
+					cmp := t
+					if defaults.InteractCaseInsensitive {
+						cmp = strings.ToLower(cmp)
+					}
+					for _, h := range hints {
+						hh := h
+						if defaults.InteractTrimSpace {
+							hh = strings.TrimSpace(hh)
+						}
+						if defaults.InteractCaseInsensitive {
+							hh = strings.ToLower(hh)
+						}
+						if hh != "" && strings.HasPrefix(cmp, hh) {
+							detectedErr = fmt.Sprintf("command error hint matched: %s", t)
+							break
+						}
+					}
+					if detectedErr != "" {
+						break
+					}
+				}
+			}
+		}
+		// 如命中了错误提示，记录任务警告日志（非致命）
+		if detectedErr != "" {
+			s.logTaskWarn(request.TaskID, fmt.Sprintf("command hint matched for %q: %s", displayCmd, detectedErr))
+		}
+		// 计算过滤统计与错误传播标记
+		var rawStripped string
+		var beforeLines, afterLines int
+		var exitCodeVal int
+		var durationMsVal int64
+		var errorVal string
+		propagated := false
+		if r != nil {
+			// 输出已由统一入口过滤，这里直接使用
+			rawStripped = r.Output
+			beforeLines = len(strings.Split(r.Output, "\n"))
+			afterLines = len(strings.Split(rawStripped, "\n"))
+			exitCodeVal = r.ExitCode
+			durationMsVal = int64(r.Duration / time.Millisecond)
+			if r.Error != "" {
+				errorVal = r.Error
+			} else if detectedErr != "" {
+				errorVal = detectedErr
+			}
+		} else {
+			exitCodeVal = -1
+			durationMsVal = 0
+			rawStripped = ""
+		}
+		view := &CommandResultView{
+			Command:      displayCmd,
+			RawOutput:    rawStripped,
+			FormatOutput: fmtRows,
+			Error:        errorVal,
+			ExitCode:     exitCodeVal,
+			DurationMS:   durationMsVal,
+		}
+		logger.Debugf("Collector output filter: cmd=%q lines_before=%d lines_after=%d exit=%d dur_ms=%d error_propagated=%v", displayCmd, beforeLines, afterLines, exitCodeVal, durationMsVal, propagated)
+		out = append(out, view)
+	}
 
-    return out, nil
+	return out, nil
 }
 
 // GetTaskStatus 获取任务状态
@@ -681,18 +811,19 @@ func (s *CollectorService) cleanupExpiredTasks() {
 
 // saveTask 保存任务到数据库
 func (s *CollectorService) saveTask(task *model.Task) error {
-	// 如果主键已存在则进行更新（upsert），避免重复任务ID导致插入失败
-	return database.WithRetry(func(db *gorm.DB) error {
-		return db.Clauses(clause.OnConflict{UpdateAll: true}).Create(task).Error
-	}, 5, 50*time.Millisecond)
+	// 暂停任务信息写库：仅输出日志用于排查
+	logger.Info("Skip task DB write", "task_id", task.ID)
+	return nil
 }
 
 // updateTask 更新任务状态
 func (s *CollectorService) updateTask(task *model.Task) error {
-	return database.WithRetry(func(db *gorm.DB) error {
-		return db.Save(task).Error
-	}, 5, 50*time.Millisecond)
+	// 暂停任务信息写库：仅输出日志用于排查
+	logger.Info("Skip task DB update", "task_id", task.ID, "status", task.Status, "duration_ms", task.Duration)
+	return nil
 }
+
+// 已移除 Redis 缓存函数（保留数据库写入版本的任务日志函数）
 
 // 已移除 Redis 缓存函数
 
@@ -716,17 +847,6 @@ func (s *CollectorService) logTaskWarn(taskID, message string) {
 
 // saveTaskLog 保存任务日志
 func (s *CollectorService) saveTaskLog(taskID, level, message string) {
-	taskLog := &model.TaskLog{
-		ID:        uuid.NewString(),
-		TaskID:    taskID,
-		Level:     level,
-		Message:   message,
-		CreatedAt: time.Now(),
-	}
-
-	if err := database.WithRetry(func(db *gorm.DB) error {
-		return db.Create(taskLog).Error
-	}, 5, 50*time.Millisecond); err != nil {
-		logger.Warn("Failed to save task log", "task_id", taskID, "error", err)
-	}
+	// 暂停任务日志入库：保留日志输出（logTask* 已记录），此处不重复写日志避免噪声
+	// 删除冗余的 return 语句
 }

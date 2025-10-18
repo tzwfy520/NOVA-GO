@@ -155,22 +155,38 @@ func (s *DeployService) ExecuteFast(ctx context.Context, req *DeployFastRequest)
 
 		// 平台交互默认
 		p := s.getPlatformInteract(d.DevicePlatform)
+		// 默认命令间隔：若平台未配置则保持 120ms
+		cmdInterval := p.CommandIntervalMS
+		if cmdInterval <= 0 { cmdInterval = 120 }
 		opts := &ssh.InteractiveOptions{
 			EnablePassword:     strings.TrimSpace(d.EnablePassword),
 			LoginPassword:      strings.TrimSpace(d.Password),
 			EnableCLI:          p.EnableCLI,
 			EnableExpectOutput: p.EnableExceptOutput,
 			ExitCommands:       []string{"exit"},
-			CommandIntervalMS:  120,
+			CommandIntervalMS:  cmdInterval,
 			AutoInteractions:   p.AutoInteractions,
 			SkipDelayedEcho:    p.SkipDelayedEcho,
+			// 新增：交互时序与节奏参数
+			PerCommandTimeoutSec:     p.CommandTimeoutSec,
+			QuietAfterMS:             p.QuietAfterMS,
+			QuietPollIntervalMS:      p.QuietPollIntervalMS,
+			EnablePasswordFallbackMS: p.EnablePasswordFallbackMS,
+			PromptInducerIntervalMS:  p.PromptInducerIntervalMS,
+			PromptInducerMaxCount:    p.PromptInducerMaxCount,
+			ExitPauseMS:              p.ExitPauseMS,
 		}
 
 		// 采集前状态：改为调用 CollectorService
 		if statusEnable == 1 && s.collector != nil {
 			cTimeout := req.Timeout
 			if cTimeout <= 0 {
-				cTimeout = 15
+				// 使用全局 ssh.timeout.timeout_all 作为默认值（秒），回退 15s
+				if s.cfg != nil && s.cfg.SSH.Timeout > 0 {
+					cTimeout = int(s.cfg.SSH.Timeout.Seconds())
+				} else {
+					cTimeout = 15
+				}
 			}
 			rf := req.RetryFlag
 			creq := &CollectRequest{
@@ -198,14 +214,7 @@ func (s *DeployService) ExecuteFast(ctx context.Context, req *DeployFastRequest)
 					cmd := strings.TrimSpace(v.Command)
 					r.DeviceStatusBefore[cmd] = v.RawOutput
 				}
-			} else if err != nil {
-				// 记录错误但不中断下发流程
-				r.DeviceStatusBefore["__error__"] = err.Error()
 			}
-			// 前采集完成后，按配置等待 deploy_wait_ms
-			wait := s.cfg.Deploy.DeployWaitMS
-			if wait <= 0 { wait = 2000 }
-			time.Sleep(time.Duration(wait) * time.Millisecond)
 		}
 
 		// 部署前平台预命令（取消分页、必要时 enable），避免与用户命令重复注入
@@ -307,93 +316,111 @@ func (s *DeployService) ExecuteFast(ctx context.Context, req *DeployFastRequest)
 
 // getPlatformInteract 读取平台交互默认，避免与其他服务深耦合，这里做最小复制
 type platformInteract struct {
-	PromptSuffixes     []string
-	AutoInteractions   []ssh.AutoInteraction
-	SkipDelayedEcho    bool
-	EnableCLI          string
-	EnableExceptOutput string
-	ErrorHints         []string
+    PromptSuffixes     []string
+    AutoInteractions   []ssh.AutoInteraction
+    SkipDelayedEcho    bool
+    EnableCLI          string
+    EnableExceptOutput string
+    ErrorHints         []string
+    // 新增：交互时序与节奏参数
+    CommandIntervalMS         int
+    CommandTimeoutSec         int
+    QuietAfterMS              int
+    QuietPollIntervalMS       int
+    EnablePasswordFallbackMS  int
+    PromptInducerIntervalMS   int
+    PromptInducerMaxCount     int
+    ExitPauseMS               int
 }
 
 func (s *DeployService) getPlatformInteract(platform string) platformInteract {
-	// 默认值
-	out := platformInteract{
-		PromptSuffixes:     []string{"#", ">"},
-		SkipDelayedEcho:    true,
-		EnableCLI:          "enable",
-		EnableExceptOutput: "password",
-		AutoInteractions: []ssh.AutoInteraction{
-			{ExpectOutput: "--More--", AutoSend: " "},
-		},
-		ErrorHints: []string{"invalid", "unknown command", "error"},
-	}
-	if s == nil || s.cfg == nil {
-		return out
-	}
-	p := strings.TrimSpace(platform)
-	if p == "" {
-		p = "default"
-	}
-	if def, ok := s.cfg.Collector.DeviceDefaults[p]; ok {
-		// PromptSuffixes
-		if len(def.PromptSuffixes) > 0 {
-			out.PromptSuffixes = def.PromptSuffixes
-		}
-		// AutoInteractions
-		if len(def.AutoInteractions) > 0 {
-			out.AutoInteractions = make([]ssh.AutoInteraction, 0, len(def.AutoInteractions))
-			for _, ai := range def.AutoInteractions {
-				if ai.ExpectOutput == "" || ai.AutoSend == "" {
-					continue
-				}
-				out.AutoInteractions = append(out.AutoInteractions, ssh.AutoInteraction{
-					ExpectOutput: ai.ExpectOutput,
-					AutoSend:     ai.AutoSend,
-				})
-			}
-		}
-		// SkipDelayedEcho
-		out.SkipDelayedEcho = def.SkipDelayedEcho
-		// EnableCLI / except_output
-		if strings.TrimSpace(def.EnableCLI) != "" {
-			out.EnableCLI = def.EnableCLI
-		}
-		if strings.TrimSpace(def.EnableExceptOutput) != "" {
-			out.EnableExceptOutput = def.EnableExceptOutput
-		}
-		// ErrorHints（优先 interact 内嵌，其次兼容旧字段）
-		if len(def.Interact.ErrorHints) > 0 {
-			out.ErrorHints = def.Interact.ErrorHints
-		} else if len(def.ErrorHints) > 0 {
-			out.ErrorHints = def.ErrorHints
-		}
-	} else if def, ok := s.cfg.Collector.DeviceDefaults["default"]; ok {
-		if len(def.PromptSuffixes) > 0 {
-			out.PromptSuffixes = def.PromptSuffixes
-		}
-		out.SkipDelayedEcho = def.SkipDelayedEcho
-		if strings.TrimSpace(def.EnableCLI) != "" {
-			out.EnableCLI = def.EnableCLI
-		}
-		if strings.TrimSpace(def.EnableExceptOutput) != "" {
-			out.EnableExceptOutput = def.EnableExceptOutput
-		}
-		if len(def.AutoInteractions) > 0 {
-			out.AutoInteractions = make([]ssh.AutoInteraction, 0, len(def.AutoInteractions))
-			for _, ai := range def.AutoInteractions {
-				if ai.ExpectOutput == "" || ai.AutoSend == "" {
-					continue
-				}
-				out.AutoInteractions = append(out.AutoInteractions, ssh.AutoInteraction{ExpectOutput: ai.ExpectOutput, AutoSend: ai.AutoSend})
-			}
-		}
-		if len(def.Interact.ErrorHints) > 0 {
-			out.ErrorHints = def.Interact.ErrorHints
-		} else if len(def.ErrorHints) > 0 {
-			out.ErrorHints = def.ErrorHints
-		}
-	}
-	return out
+    // 默认值
+    out := platformInteract{
+        PromptSuffixes:     []string{"#", ">"},
+        SkipDelayedEcho:    true,
+        EnableCLI:          "enable",
+        EnableExceptOutput: "password",
+        AutoInteractions: []ssh.AutoInteraction{
+            {ExpectOutput: "--More--", AutoSend: " "},
+        },
+        ErrorHints: []string{"invalid", "unknown command", "error"},
+    }
+    if s == nil || s.cfg == nil {
+        return out
+    }
+    p := strings.TrimSpace(platform)
+    if p == "" {
+        p = "default"
+    }
+    if def, ok := s.cfg.Collector.DeviceDefaults[p]; ok {
+        // PromptSuffixes
+        if len(def.PromptSuffixes) > 0 {
+            out.PromptSuffixes = def.PromptSuffixes
+        }
+        // AutoInteractions（优先嵌套 interact）
+        if len(def.Interact.AutoInteractions) > 0 {
+            out.AutoInteractions = make([]ssh.AutoInteraction, 0, len(def.Interact.AutoInteractions))
+            for _, ai := range def.Interact.AutoInteractions {
+                if ai.ExpectOutput == "" || ai.AutoSend == "" { continue }
+                out.AutoInteractions = append(out.AutoInteractions, ssh.AutoInteraction{ExpectOutput: ai.ExpectOutput, AutoSend: ai.AutoSend})
+            }
+        } else if len(def.AutoInteractions) > 0 {
+            out.AutoInteractions = make([]ssh.AutoInteraction, 0, len(def.AutoInteractions))
+            for _, ai := range def.AutoInteractions {
+                if ai.ExpectOutput == "" || ai.AutoSend == "" { continue }
+                out.AutoInteractions = append(out.AutoInteractions, ssh.AutoInteraction{ExpectOutput: ai.ExpectOutput, AutoSend: ai.AutoSend})
+            }
+        }
+        // SkipDelayedEcho
+        out.SkipDelayedEcho = def.SkipDelayedEcho
+        // EnableCLI / except_output
+        if strings.TrimSpace(def.EnableCLI) != "" { out.EnableCLI = strings.TrimSpace(def.EnableCLI) }
+        if strings.TrimSpace(def.EnableExceptOutput) != "" { out.EnableExceptOutput = strings.TrimSpace(def.EnableExceptOutput) }
+        // 错误提示（优先嵌套 interact）
+        if len(def.Interact.ErrorHints) > 0 { out.ErrorHints = def.Interact.ErrorHints } else if len(def.ErrorHints) > 0 { out.ErrorHints = def.ErrorHints }
+        // 节奏与时序参数（优先平台 timeout.interact_timeout；其次旧直出字段）
+        if def.Timeout.Interact.CommandIntervalMS > 0 { out.CommandIntervalMS = def.Timeout.Interact.CommandIntervalMS } else if def.CommandIntervalMS > 0 { out.CommandIntervalMS = def.CommandIntervalMS }
+        if def.Timeout.Interact.CommandTimeoutSec > 0 { out.CommandTimeoutSec = def.Timeout.Interact.CommandTimeoutSec } else if def.CommandTimeoutSec > 0 { out.CommandTimeoutSec = def.CommandTimeoutSec }
+        if def.Timeout.Interact.QuietAfterMS > 0 { out.QuietAfterMS = def.Timeout.Interact.QuietAfterMS } else if def.QuietAfterMS > 0 { out.QuietAfterMS = def.QuietAfterMS }
+        if def.Timeout.Interact.QuietPollIntervalMS > 0 { out.QuietPollIntervalMS = def.Timeout.Interact.QuietPollIntervalMS } else if def.QuietPollIntervalMS > 0 { out.QuietPollIntervalMS = def.QuietPollIntervalMS }
+        if def.Timeout.Interact.EnablePasswordFallbackMS > 0 { out.EnablePasswordFallbackMS = def.Timeout.Interact.EnablePasswordFallbackMS } else if def.EnablePasswordFallbackMS > 0 { out.EnablePasswordFallbackMS = def.EnablePasswordFallbackMS }
+        if def.Timeout.Interact.PromptInducerIntervalMS > 0 { out.PromptInducerIntervalMS = def.Timeout.Interact.PromptInducerIntervalMS } else if def.PromptInducerIntervalMS > 0 { out.PromptInducerIntervalMS = def.PromptInducerIntervalMS }
+        if def.Timeout.Interact.PromptInducerMaxCount > 0 { out.PromptInducerMaxCount = def.Timeout.Interact.PromptInducerMaxCount } else if def.PromptInducerMaxCount > 0 { out.PromptInducerMaxCount = def.PromptInducerMaxCount }
+        if def.Timeout.Interact.ExitPauseMS > 0 { out.ExitPauseMS = def.Timeout.Interact.ExitPauseMS } else if def.ExitPauseMS > 0 { out.ExitPauseMS = def.ExitPauseMS }
+        return out
+    }
+    if def, ok := s.cfg.Collector.DeviceDefaults["default"]; ok {
+        if len(def.PromptSuffixes) > 0 { out.PromptSuffixes = def.PromptSuffixes }
+        // AutoInteractions
+        if len(def.Interact.AutoInteractions) > 0 {
+            out.AutoInteractions = make([]ssh.AutoInteraction, 0, len(def.Interact.AutoInteractions))
+            for _, ai := range def.Interact.AutoInteractions {
+                if ai.ExpectOutput == "" || ai.AutoSend == "" { continue }
+                out.AutoInteractions = append(out.AutoInteractions, ssh.AutoInteraction{ExpectOutput: ai.ExpectOutput, AutoSend: ai.AutoSend})
+            }
+        } else if len(def.AutoInteractions) > 0 {
+            out.AutoInteractions = make([]ssh.AutoInteraction, 0, len(def.AutoInteractions))
+            for _, ai := range def.AutoInteractions {
+                if ai.ExpectOutput == "" || ai.AutoSend == "" { continue }
+                out.AutoInteractions = append(out.AutoInteractions, ssh.AutoInteraction{ExpectOutput: ai.ExpectOutput, AutoSend: ai.AutoSend})
+            }
+        }
+        out.SkipDelayedEcho = def.SkipDelayedEcho
+        if strings.TrimSpace(def.EnableCLI) != "" { out.EnableCLI = strings.TrimSpace(def.EnableCLI) }
+        if strings.TrimSpace(def.EnableExceptOutput) != "" { out.EnableExceptOutput = strings.TrimSpace(def.EnableExceptOutput) }
+        if len(def.Interact.ErrorHints) > 0 { out.ErrorHints = def.Interact.ErrorHints } else if len(def.ErrorHints) > 0 { out.ErrorHints = def.ErrorHints }
+        // 节奏与时序参数（default；优先嵌套）
+        if def.Timeout.Interact.CommandIntervalMS > 0 { out.CommandIntervalMS = def.Timeout.Interact.CommandIntervalMS } else if def.CommandIntervalMS > 0 { out.CommandIntervalMS = def.CommandIntervalMS }
+        if def.Timeout.Interact.CommandTimeoutSec > 0 { out.CommandTimeoutSec = def.Timeout.Interact.CommandTimeoutSec } else if def.CommandTimeoutSec > 0 { out.CommandTimeoutSec = def.CommandTimeoutSec }
+        if def.Timeout.Interact.QuietAfterMS > 0 { out.QuietAfterMS = def.Timeout.Interact.QuietAfterMS } else if def.QuietAfterMS > 0 { out.QuietAfterMS = def.QuietAfterMS }
+        if def.Timeout.Interact.QuietPollIntervalMS > 0 { out.QuietPollIntervalMS = def.Timeout.Interact.QuietPollIntervalMS } else if def.QuietPollIntervalMS > 0 { out.QuietPollIntervalMS = def.QuietPollIntervalMS }
+        if def.Timeout.Interact.EnablePasswordFallbackMS > 0 { out.EnablePasswordFallbackMS = def.Timeout.Interact.EnablePasswordFallbackMS } else if def.EnablePasswordFallbackMS > 0 { out.EnablePasswordFallbackMS = def.EnablePasswordFallbackMS }
+        if def.Timeout.Interact.PromptInducerIntervalMS > 0 { out.PromptInducerIntervalMS = def.Timeout.Interact.PromptInducerIntervalMS } else if def.PromptInducerIntervalMS > 0 { out.PromptInducerIntervalMS = def.PromptInducerIntervalMS }
+        if def.Timeout.Interact.PromptInducerMaxCount > 0 { out.PromptInducerMaxCount = def.Timeout.Interact.PromptInducerMaxCount } else if def.PromptInducerMaxCount > 0 { out.PromptInducerMaxCount = def.PromptInducerMaxCount }
+        if def.Timeout.Interact.ExitPauseMS > 0 { out.ExitPauseMS = def.Timeout.Interact.ExitPauseMS } else if def.ExitPauseMS > 0 { out.ExitPauseMS = def.ExitPauseMS }
+        return out
+    }
+    return out
 }
 
 // buildDeploySequence 构建下发序列，仅返回用户提供的命令（移除平台层的配置模式命令）

@@ -1,15 +1,15 @@
 package service
 
 import (
-    "context"
-    "errors"
-    "fmt"
-    "net"
-    "strings"
-    "time"
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"time"
 
-    "github.com/sshcollectorpro/sshcollectorpro/internal/config"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
 )
 
 // ExecRequest 执行器输入参数（设备连接信息）
@@ -82,15 +82,15 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 			loginCtx = ctx
 		}
 	}
-    client, err := b.pool.GetConnection(loginCtx, conn)
-    if err != nil {
-        // 设备登陆阶段的超时错误，统一标注为“设备登陆失败”
-        if isLoginTimeout(err) {
-            return nil, fmt.Errorf("设备登陆失败")
-        }
-        return nil, fmt.Errorf("failed to create SSH connection: %w", err)
-    }
-    defer b.pool.ReleaseConnection(conn)
+	client, err := b.pool.GetConnection(loginCtx, conn)
+	if err != nil {
+		// 设备登陆阶段的超时错误，统一标注为“设备登陆失败”
+		if isLoginTimeout(err) {
+			return nil, fmt.Errorf("设备登陆失败")
+		}
+		return nil, fmt.Errorf("failed to create SSH connection: %w", err)
+	}
+	defer b.pool.ReleaseConnection(conn)
 
 	// 注入平台级预命令（enable 与分页关闭）
 	commands := make([]string, 0, len(userCommands)+4)
@@ -126,46 +126,68 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 		interactive.ExitCommands = []string{"exit", "quit"}
 	}
 	// enable 配置
-    if dd, ok := b.cfg.Collector.DeviceDefaults[p]; ok && dd.EnableRequired {
-        interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
-        interactive.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
-        if strings.TrimSpace(req.EnablePassword) != "" {
-            interactive.EnablePassword = strings.TrimSpace(req.EnablePassword)
-        } else if strings.TrimSpace(req.Password) != "" {
-            interactive.EnablePassword = strings.TrimSpace(req.Password)
-        }
-    } else if strings.HasPrefix(p, "cisco") {
-        // 兼容 Cisco 默认行为
-        if strings.TrimSpace(req.EnablePassword) != "" {
-            interactive.EnablePassword = strings.TrimSpace(req.EnablePassword)
-        } else if strings.TrimSpace(req.Password) != "" {
-            interactive.EnablePassword = strings.TrimSpace(req.Password)
-        }
-        if strings.TrimSpace(interactive.EnableCLI) == "" {
-            interactive.EnableCLI = "enable"
-        }
-        if strings.TrimSpace(interactive.EnableExpectOutput) == "" {
-            interactive.EnableExpectOutput = "Password"
-        }
-    }
-    // 始终记录登录密码，用于 Linux sudo 回退（若 enable 密码与登录密码不同）
-    if strings.TrimSpace(req.Password) != "" {
-        interactive.LoginPassword = strings.TrimSpace(req.Password)
-    }
-    if defaults.CommandIntervalMS > 0 {
-        interactive.CommandIntervalMS = defaults.CommandIntervalMS
-    }
-    if len(defaults.AutoInteractions) > 0 {
-        mapped := make([]ssh.AutoInteraction, 0, len(defaults.AutoInteractions))
-        for _, ai := range defaults.AutoInteractions {
-            if strings.TrimSpace(ai.ExpectOutput) == "" || strings.TrimSpace(ai.AutoSend) == "" {
-                continue
-            }
-            mapped = append(mapped, ssh.AutoInteraction{ExpectOutput: ai.ExpectOutput, AutoSend: ai.AutoSend})
-        }
-        interactive.AutoInteractions = mapped
-    }
-    // 不再叠加全局交互；交互配置由平台/device_defaults.interact 提供
+	if dd, ok := b.cfg.Collector.DeviceDefaults[p]; ok && dd.EnableRequired {
+		interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
+		interactive.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
+		if strings.TrimSpace(req.EnablePassword) != "" {
+			interactive.EnablePassword = strings.TrimSpace(req.EnablePassword)
+		} else if strings.TrimSpace(req.Password) != "" {
+			interactive.EnablePassword = strings.TrimSpace(req.Password)
+		}
+	} else if strings.HasPrefix(p, "cisco") {
+		// 兼容 Cisco 默认行为
+		if strings.TrimSpace(req.EnablePassword) != "" {
+			interactive.EnablePassword = strings.TrimSpace(req.EnablePassword)
+		} else if strings.TrimSpace(req.Password) != "" {
+			interactive.EnablePassword = strings.TrimSpace(req.Password)
+		}
+		if strings.TrimSpace(interactive.EnableCLI) == "" {
+			interactive.EnableCLI = "enable"
+		}
+		if strings.TrimSpace(interactive.EnableExpectOutput) == "" {
+			interactive.EnableExpectOutput = "Password"
+		}
+	}
+	// 始终记录登录密码，用于 Linux sudo 回退（若 enable 密码与登录密码不同）
+	if strings.TrimSpace(req.Password) != "" {
+		interactive.LoginPassword = strings.TrimSpace(req.Password)
+	}
+	if defaults.CommandIntervalMS > 0 {
+		interactive.CommandIntervalMS = defaults.CommandIntervalMS
+	}
+	// 新增：交互时序与节奏参数映射
+	if defaults.CommandTimeoutSec > 0 {
+		interactive.PerCommandTimeoutSec = defaults.CommandTimeoutSec
+	}
+	if defaults.QuietAfterMS > 0 {
+		interactive.QuietAfterMS = defaults.QuietAfterMS
+	}
+	if defaults.QuietPollIntervalMS > 0 {
+		interactive.QuietPollIntervalMS = defaults.QuietPollIntervalMS
+	}
+	if defaults.EnablePasswordFallbackMS > 0 {
+		interactive.EnablePasswordFallbackMS = defaults.EnablePasswordFallbackMS
+	}
+	if defaults.PromptInducerIntervalMS > 0 {
+		interactive.PromptInducerIntervalMS = defaults.PromptInducerIntervalMS
+	}
+	if defaults.PromptInducerMaxCount > 0 {
+		interactive.PromptInducerMaxCount = defaults.PromptInducerMaxCount
+	}
+	if defaults.ExitPauseMS > 0 {
+		interactive.ExitPauseMS = defaults.ExitPauseMS
+	}
+	if len(defaults.AutoInteractions) > 0 {
+		mapped := make([]ssh.AutoInteraction, 0, len(defaults.AutoInteractions))
+		for _, ai := range defaults.AutoInteractions {
+			if strings.TrimSpace(ai.ExpectOutput) == "" || strings.TrimSpace(ai.AutoSend) == "" {
+				continue
+			}
+			mapped = append(mapped, ssh.AutoInteraction{ExpectOutput: ai.ExpectOutput, AutoSend: ai.AutoSend})
+		}
+		interactive.AutoInteractions = mapped
+	}
+	// 不再叠加全局交互；交互配置由平台/device_defaults.interact 提供
 
 	// 交互优先执行
 	res, err := client.ExecuteInteractiveCommands(execCtx, commands, promptSuffixes, interactive)
@@ -192,10 +214,10 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 				continue
 			}
 			nr := *r
-            nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
+			nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
 			out = append(out, &nr)
 		}
-	    return out, nil
+		return out, nil
 	}
 
 	// 正常交互结果：统一过滤与输出处理
@@ -206,7 +228,7 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 			continue
 		}
 		nr := *r
-        nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
+		nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
 		out = append(out, &nr)
 	}
 	return out, nil
@@ -214,26 +236,25 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 
 // isLoginTimeout 判断连接/握手阶段是否为典型超时错误
 func isLoginTimeout(err error) bool {
-    if err == nil {
-        return false
-    }
-    // 上下文超时
-    if errors.Is(err, context.DeadlineExceeded) {
-        return true
-    }
-    // 网络层超时（包括 i/o timeout 等）
-    var ne net.Error
-    if errors.As(err, &ne) && ne.Timeout() {
-        return true
-    }
-    // 字符串兜底匹配
-    msg := strings.ToLower(err.Error())
-    if strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") || strings.Contains(msg, "i/o timeout") {
-        return true
-    }
-    return false
+	if err == nil {
+		return false
+	}
+	// 上下文超时
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// 网络层超时（包括 i/o timeout 等）
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	// 字符串兜底匹配
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") || strings.Contains(msg, "i/o timeout") {
+		return true
+	}
+	return false
 }
-
 
 // filterInternalPreCommandsBase 基于配置过滤预命令结果（enable 与关闭分页），保留用户命令对应输出
 func filterInternalPreCommandsBase(cfg *config.Config, platform string, userCmds []string, results []*ssh.CommandResult) []*ssh.CommandResult {

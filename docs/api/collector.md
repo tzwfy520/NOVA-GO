@@ -251,3 +251,12 @@
 - 系统允许在配置中扩展新的 `device_platform`，接口不限制具体取值；未内置的平台将使用通用交互默认。
 - 建议在配置文件中为新平台设置：提示符后缀（`prompt_suffixes`）、分页关闭命令（`disable_paging_cmds`）、是否需要特权（`enable_required`）、特权进入命令（`enable_cli`）、以及分页/提示的自动交互（`auto_interactions`）。
 - 如需扩展，请参考 `configs/config.yaml` 的 `collector.device_defaults` 与 `collector.interact.auto_interactions` 配置段示例。
+- 交互时序参数（可选）：可在 `collector.device_defaults.<platform>` 下设置以下键以覆盖默认行为：
+  - `command_interval_ms`：两条命令之间的发送间隔，避免设备限流（默认不等待）。
+  - `command_timeout_sec`：单条命令最长等待时间（默认 30）。
+  - `quiet_after_ms`：在已收到输出后连续静默视为完成的阈值（默认 800）。
+  - `quiet_poll_interval_ms`：静默检测轮询间隔（默认 250）。
+  - `enable_password_fallback_ms`：未检测到 enable 密码提示时的回退发送延迟（默认 1500）。
+  - `prompt_inducer_interval_ms`：初始提示符诱发器发送 CRLF 的间隔（默认 1000）。
+  - `prompt_inducer_max_count`：初始提示符诱发器的最大次数（默认 12）。
+  - `exit_pause_ms`：退出命令间的停顿时间（默认 150）。
