@@ -31,13 +31,13 @@ func (h *DeployHandler) FastDeploy(c *gin.Context) {
     }
 
     // 默认超时时间：优先使用全局 ssh.timeout.timeout_all；否则回退 15s
-    if req.Timeout <= 0 {
-        if cfg := config.Get(); cfg != nil && cfg.SSH.Timeout > 0 {
-            req.Timeout = int(cfg.SSH.Timeout.Seconds())
-        } else {
-            req.Timeout = 15
-        }
-    }
+	if req.TaskTimeout <= 0 {
+		if cfg := config.Get(); cfg != nil && cfg.SSH.Timeout > 0 {
+			req.TaskTimeout = int(cfg.SSH.Timeout.Seconds())
+		} else {
+			req.TaskTimeout = 15
+		}
+	}
 
     resp, err := h.svc.ExecuteFast(c.Request.Context(), &req)
     if err != nil {

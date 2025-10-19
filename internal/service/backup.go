@@ -33,7 +33,7 @@ type BackupBatchRequest struct {
 	SaveDir        string         `json:"save_dir,omitempty"`
 	StorageBackend string         `json:"storage_backend,omitempty"` // local | minio（默认读取配置）
 	RetryFlag      *int           `json:"retry_flag,omitempty"`
-	Timeout        *int           `json:"timeout,omitempty"`
+	TaskTimeout    *int           `json:"task_timeout,omitempty"`
 	Devices        []BackupDevice `json:"devices"`
 }
 
@@ -48,6 +48,7 @@ type BackupDevice struct {
 	Password        string   `json:"password"`
 	EnablePassword  string   `json:"enable_password,omitempty"`
 	CliList         []string `json:"cli_list"`
+	DeviceTimeout   *int     `json:"device_timeout,omitempty"`
 }
 
 // StoredObject 存储的对象信息
@@ -596,6 +597,7 @@ func NewBackupService(cfg *config.Config) *BackupService {
 		MaxIdle:     10,
 		MaxActive:   conc,
 		IdleTimeout: 5 * time.Minute,
+		CleanupInterval: cfg.SSH.CleanupInterval,
 		SSHConfig: &ssh.Config{
 			Timeout:        cfg.SSH.Timeout,
 			ConnectTimeout: cfg.SSH.ConnectTimeout,
@@ -667,7 +669,7 @@ func (s *BackupService) ExecuteBatch(ctx context.Context, req *BackupBatchReques
 		// 队列限流：等待工作令牌，避免 HTTP ctx 过早结束
 		go func() {
 			// 采用有效超时作为队列等待窗口
-			effTimeout := s.effectiveTimeout(req.Timeout, dev.DevicePlatform)
+			effTimeout := s.effectiveTimeout(req.TaskTimeout, dev.DevicePlatform)
 			waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Duration(effTimeout)*time.Second)
 			defer waitCancel()
 			select {
@@ -721,7 +723,13 @@ func (s *BackupService) ExecuteBatch(ctx context.Context, req *BackupBatchReques
 				UserName:        dev.UserName,
 				Password:        dev.Password,
 				EnablePassword:  dev.EnablePassword,
-				TimeoutSec:      s.effectiveTimeout(req.Timeout, dev.DevicePlatform),
+				TaskTimeoutSec:   s.effectiveTimeout(req.TaskTimeout, dev.DevicePlatform),
+				DeviceTimeoutSec: func() int {
+					if dev.DeviceTimeout != nil && *dev.DeviceTimeout > 0 {
+						return *dev.DeviceTimeout
+					}
+					return s.effectiveTimeout(req.TaskTimeout, dev.DevicePlatform)
+				}(),
 			}
 
 			// 支持有限重试（请求优先，平台默认回退）

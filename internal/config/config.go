@@ -144,6 +144,7 @@ type SSHConfig struct {
 	Timeout           time.Duration `mapstructure:"-"`
 	ConnectTimeout    time.Duration `mapstructure:"connect_timeout"`
 	KeepAliveInterval time.Duration `mapstructure:"keep_alive_interval"`
+	CleanupInterval   time.Duration `mapstructure:"cleanup_interval"`
 	MaxSessions       int           `mapstructure:"max_sessions"`
 }
 
@@ -307,6 +308,9 @@ func setDefaults() {
 	viper.SetDefault("ssh.timeout.dial_timeout", 2)
 	viper.SetDefault("ssh.timeout.auth_timeout", 5)
 
+	// 新增：连接池清理周期默认 30s（可通过 ssh.cleanup_interval 覆盖）
+	viper.SetDefault("ssh.cleanup_interval", 30*time.Second)
+
 	// 移除旧键：不再设置 ssh.connect_timeout 默认值
 	// （若配置文件仍包含旧键，将在 Load 阶段被新的嵌套键覆盖）
 }
@@ -468,30 +472,32 @@ type PlatformTimeoutConfig struct {
 
 // PlatformDefaultsConfig 平台默认交互配置（提示符、分页、enable 与自动交互）
 type PlatformDefaultsConfig struct {
-	PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
-	DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
-	AutoInteractions  []AutoInteractionConfig `mapstructure:"auto_interactions"`
-	ErrorHints        []string                `mapstructure:"error_hints"`
-	SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
-	EnableRequired    bool                    `mapstructure:"enable_required"`
-	// OutputFilter：平台级输出过滤（与全局 collector.output_filter 合并或覆盖）
-	OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
-	// Interact: 平台级交互配置（错误提示匹配）
-	Interact InteractConfig `mapstructure:"interact"`
-	// Enable/Sudo 提权命令与提示匹配
-	EnableCLI          string `mapstructure:"enable_cli"`
-	EnableExceptOutput string `mapstructure:"except_output"`
-	// 进入配置模式命令（按序尝试）
-	ConfigModeCLIs []string `mapstructure:"config_mode_clis"`
-	// 新增：交互时序与节奏参数（旧直出字段，仍保留以兼容老配置）
-	CommandIntervalMS         int `mapstructure:"command_interval_ms"`
-	CommandTimeoutSec         int `mapstructure:"command_timeout_sec"`
-	QuietAfterMS              int `mapstructure:"quiet_after_ms"`
-	QuietPollIntervalMS       int `mapstructure:"quiet_poll_interval_ms"`
-	EnablePasswordFallbackMS  int `mapstructure:"enable_password_fallback_ms"`
-	PromptInducerIntervalMS   int `mapstructure:"prompt_inducer_interval_ms"`
-	PromptInducerMaxCount     int `mapstructure:"prompt_inducer_max_count"`
-	ExitPauseMS               int `mapstructure:"exit_pause_ms"`
-	// 新增：平台层嵌套 timeout（结构与全局 ssh.timeout 一致）
-	Timeout PlatformTimeoutConfig `mapstructure:"timeout"`
+    PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
+    DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
+    AutoInteractions  []AutoInteractionConfig `mapstructure:"auto_interactions"`
+    ErrorHints        []string                `mapstructure:"error_hints"`
+    SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
+    EnableRequired    bool                    `mapstructure:"enable_required"`
+    // OutputFilter：平台级输出过滤（与全局 collector.output_filter 合并或覆盖）
+    OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
+    // Interact: 平台级交互配置（错误提示匹配）
+    Interact InteractConfig `mapstructure:"interact"`
+    // Enable/Sudo 提权命令与提示匹配
+    EnableCLI          string `mapstructure:"enable_cli"`
+    EnableExceptOutput string `mapstructure:"except_output"`
+    // 进入配置模式命令（按序尝试）
+    ConfigModeCLIs []string `mapstructure:"config_mode_clis"`
+    // 退出配置模式命令（新增）
+    ConfigExitCLI string `mapstructure:"config_exit_cli"`
+    // 新增：交互时序与节奏参数（旧直出字段，仍保留以兼容老配置）
+    CommandIntervalMS         int `mapstructure:"command_interval_ms"`
+    CommandTimeoutSec         int `mapstructure:"command_timeout_sec"`
+    QuietAfterMS              int `mapstructure:"quiet_after_ms"`
+    QuietPollIntervalMS       int `mapstructure:"quiet_poll_interval_ms"`
+    EnablePasswordFallbackMS  int `mapstructure:"enable_password_fallback_ms"`
+    PromptInducerIntervalMS   int `mapstructure:"prompt_inducer_interval_ms"`
+    PromptInducerMaxCount     int `mapstructure:"prompt_inducer_max_count"`
+    ExitPauseMS               int `mapstructure:"exit_pause_ms"`
+    // 新增：平台层嵌套 timeout（结构与全局 ssh.timeout 一致）
+    Timeout PlatformTimeoutConfig `mapstructure:"timeout"`
 }

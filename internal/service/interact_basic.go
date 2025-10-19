@@ -22,7 +22,8 @@ type ExecRequest struct {
 	UserName        string
 	Password        string
 	EnablePassword  string
-	TimeoutSec      int
+	TaskTimeoutSec   int
+	DeviceTimeoutSec int
 }
 
 // InteractBasic 统一的设备基础交互入口：
@@ -65,23 +66,35 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 	}
 
 	// 任务超时控制（用于整个执行窗口）
-	effTimeout := req.TimeoutSec
-	if effTimeout <= 0 {
-		effTimeout = 30
+	effTaskTimeout := req.TaskTimeoutSec
+	if effTaskTimeout <= 0 {
+		effTaskTimeout = 30
 	}
-	execCtx, cancel := context.WithTimeout(ctx, time.Duration(effTimeout)*time.Second)
-	defer cancel()
+	execCtx, cancelExec := context.WithTimeout(ctx, time.Duration(effTaskTimeout)*time.Second)
+	defer cancelExec()
 
-	// 获取一次连接（单次登录执行整批命令）
-	// 登录阶段采用“有效超时”作为上限，避免等待过长或与请求不一致
-	loginCtx := execCtx
-	if deadline, ok := ctx.Deadline(); ok {
+	// 登录阶段采用设备连接超时窗口；若未设置则回退到任务窗口
+	devTO := req.DeviceTimeoutSec
+	if devTO <= 0 {
+		devTO = effTaskTimeout
+	}
+
+	var loginCtx context.Context = execCtx
+	var cancelLogin context.CancelFunc
+	// 若设备连接超时短于任务超时，则创建更短的登录上下文
+	if time.Duration(devTO)*time.Second < time.Duration(effTaskTimeout)*time.Second {
+		loginCtx, cancelLogin = context.WithTimeout(ctx, time.Duration(devTO)*time.Second)
+		defer cancelLogin()
+	} else {
 		// 若父上下文更紧，则以父上下文为准
-		remain := time.Until(deadline)
-		if remain > 0 && remain < time.Duration(effTimeout)*time.Second {
-			loginCtx = ctx
+		if deadline, ok := ctx.Deadline(); ok {
+			remain := time.Until(deadline)
+			if remain > 0 && remain < time.Duration(effTaskTimeout)*time.Second {
+				loginCtx = ctx
+			}
 		}
 	}
+
 	client, err := b.pool.GetConnection(loginCtx, conn)
 	if err != nil {
 		// 设备登陆阶段的超时错误，统一标注为“设备登陆失败”
@@ -116,16 +129,11 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 
 	// 构造交互选项，包括 enable 流程与自动交互
 	interactive := &ssh.InteractiveOptions{SkipDelayedEcho: defaults.SkipDelayedEcho}
-	// 退出命令按平台设置
-	p := strings.ToLower(strings.TrimSpace(req.DevicePlatform))
-	if strings.HasPrefix(p, "cisco") {
-		interactive.ExitCommands = []string{"exit"}
-	} else if strings.HasPrefix(p, "h3c") || strings.HasPrefix(p, "huawei") {
-		interactive.ExitCommands = []string{"quit", "exit"}
-	} else {
-		interactive.ExitCommands = []string{"exit", "quit"}
-	}
+	// 新增：用于精确提示符判定
+	interactive.DeviceName = strings.TrimSpace(req.DeviceName)
+	interactive.PromptSuffixes = promptSuffixes
 	// enable 配置
+	p := strings.ToLower(strings.TrimSpace(req.DevicePlatform))
 	if dd, ok := b.cfg.Collector.DeviceDefaults[p]; ok && dd.EnableRequired {
 		interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
 		interactive.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
@@ -148,7 +156,6 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 			interactive.EnableExpectOutput = "Password"
 		}
 	}
-	// 始终记录登录密码，用于 Linux sudo 回退（若 enable 密码与登录密码不同）
 	if strings.TrimSpace(req.Password) != "" {
 		interactive.LoginPassword = strings.TrimSpace(req.Password)
 	}
@@ -365,4 +372,94 @@ func (b *InteractBasic) getPreCommands(platform string, user []string) []string 
 		}
 	}
 	return out
+}
+
+// EnterConfigMode 统一进入配置模式：读取平台 config_mode_clis 并执行
+func (b *InteractBasic) EnterConfigMode(ctx context.Context, req *ExecRequest) ([]*ssh.CommandResult, error) {
+    if b == nil || b.cfg == nil || b.pool == nil { return nil, fmt.Errorf("InteractBasic not initialized") }
+    p := strings.ToLower(strings.TrimSpace(func() string { if req.DevicePlatform == "" { return "default" }; return req.DevicePlatform }()))
+    dd, ok := b.cfg.Collector.DeviceDefaults[p]
+    if !ok {
+        found := false
+        if strings.HasPrefix(p, "huawei") {
+            if v, ok2 := b.cfg.Collector.DeviceDefaults["huawei"]; ok2 { dd = v; found = true }
+        }
+        if !found && strings.HasPrefix(p, "h3c") {
+            if v, ok2 := b.cfg.Collector.DeviceDefaults["h3c"]; ok2 { dd = v; found = true }
+        }
+        if !found && strings.HasPrefix(p, "cisco") {
+            if v, ok2 := b.cfg.Collector.DeviceDefaults["cisco_ios"]; ok2 { dd = v; found = true }
+        }
+        if !found && strings.HasPrefix(p, "linux") {
+            if v, ok2 := b.cfg.Collector.DeviceDefaults["linux"]; ok2 { dd = v; found = true }
+        }
+    }
+    cmds := make([]string, 0, len(dd.ConfigModeCLIs))
+    for _, c := range dd.ConfigModeCLIs { t := strings.TrimSpace(c); if t != "" { cmds = append(cmds, t) } }
+    if len(cmds) == 0 { return nil, nil }
+
+    // 连接复用与上下文
+    effTaskTimeout := req.TaskTimeoutSec; if effTaskTimeout <= 0 { effTaskTimeout = 30 }
+    execCtx, cancelExec := context.WithTimeout(ctx, time.Duration(effTaskTimeout)*time.Second); defer cancelExec()
+    devTO := req.DeviceTimeoutSec; if devTO <= 0 { devTO = effTaskTimeout }
+    var loginCtx context.Context = execCtx; var cancelLogin context.CancelFunc
+    if time.Duration(devTO)*time.Second < time.Duration(effTaskTimeout)*time.Second {
+        loginCtx, cancelLogin = context.WithTimeout(ctx, time.Duration(devTO)*time.Second); defer cancelLogin()
+    } else {
+        if deadline, ok := ctx.Deadline(); ok { remain := time.Until(deadline); if remain > 0 && remain < time.Duration(effTaskTimeout)*time.Second { loginCtx = ctx } }
+    }
+    conn := &ssh.ConnectionInfo{ Host: req.DeviceIP, Port: func() int { if req.Port < 1 || req.Port > 65535 { return 22 }; return req.Port }(), Username: req.UserName, Password: req.Password }
+    client, err := b.pool.GetConnection(loginCtx, conn)
+    if err != nil { if isLoginTimeout(err) { return nil, fmt.Errorf("设备登陆失败") }; return nil, fmt.Errorf("failed to create SSH connection: %w", err) }
+    defer b.pool.ReleaseConnection(conn)
+
+    // 平台交互参数（与 Execute 一致）
+    defaults := getPlatformDefaults(p)
+    promptSuffixes := defaults.PromptSuffixes; if len(promptSuffixes) == 0 { promptSuffixes = []string{"#", ">", "]"} }
+    interactive := &ssh.InteractiveOptions{ SkipDelayedEcho: defaults.SkipDelayedEcho }
+    // 新增：用于精确提示符判定
+    interactive.DeviceName = strings.TrimSpace(req.DeviceName)
+    interactive.PromptSuffixes = promptSuffixes
+    if dd.EnableRequired {
+        interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
+        interactive.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
+        if strings.TrimSpace(req.EnablePassword) != "" { interactive.EnablePassword = strings.TrimSpace(req.EnablePassword) } else if strings.TrimSpace(req.Password) != "" { interactive.EnablePassword = strings.TrimSpace(req.Password) }
+    }
+    if strings.TrimSpace(req.Password) != "" { interactive.LoginPassword = strings.TrimSpace(req.Password) }
+    if defaults.CommandIntervalMS > 0 { interactive.CommandIntervalMS = defaults.CommandIntervalMS }
+    if defaults.CommandTimeoutSec > 0 { interactive.PerCommandTimeoutSec = defaults.CommandTimeoutSec }
+    if defaults.QuietAfterMS > 0 { interactive.QuietAfterMS = defaults.QuietAfterMS }
+    if defaults.QuietPollIntervalMS > 0 { interactive.QuietPollIntervalMS = defaults.QuietPollIntervalMS }
+    if defaults.EnablePasswordFallbackMS > 0 { interactive.EnablePasswordFallbackMS = defaults.EnablePasswordFallbackMS }
+    if defaults.PromptInducerIntervalMS > 0 { interactive.PromptInducerIntervalMS = defaults.PromptInducerIntervalMS }
+    if defaults.PromptInducerMaxCount > 0 { interactive.PromptInducerMaxCount = defaults.PromptInducerMaxCount }
+    if defaults.ExitPauseMS > 0 { interactive.ExitPauseMS = defaults.ExitPauseMS }
+    // 退出命令序列（会话结束时使用）
+    if strings.HasPrefix(p, "cisco") { interactive.ExitCommands = []string{"exit"} } else if strings.HasPrefix(p, "h3c") || strings.HasPrefix(p, "huawei") { interactive.ExitCommands = []string{"quit", "exit"} } else { interactive.ExitCommands = []string{"exit", "quit"} }
+
+    // 交互执行进入配置模式命令，失败则回退到非交互执行
+    res, err := client.ExecuteInteractiveCommands(execCtx, cmds, promptSuffixes, interactive)
+    if err != nil {
+        _ = b.pool.CloseConnection(conn)
+        client2, errConn := b.pool.GetConnection(loginCtx, conn)
+        if errConn != nil { return nil, fmt.Errorf("interactive failed: %v; fallback reconnect failed: %w", err, errConn) }
+        defer b.pool.ReleaseConnection(conn)
+        res2, err2 := client2.ExecuteCommands(execCtx, cmds)
+        if err2 != nil { return nil, fmt.Errorf("interactive failed: %v; non-interactive failed: %w", err, err2) }
+        return res2, nil
+    }
+    return res, nil
+}
+
+// isUserOrPrivPrompt 判断是否“仅主机名 + 提示符后缀”，用于退出配置模式成功判断
+func isUserOrPrivPrompt(line string, suffixes []string) bool {
+    s := strings.TrimSpace(line)
+    if s == "" { return false }
+    found := false
+    for _, suf := range suffixes { if strings.HasSuffix(s, suf) { found = true; break } }
+    if !found { return false }
+    l := strings.ToLower(s)
+    // 排除典型配置模式特征：包含 "["（如 [HUAWEI]）或 "("（如 (config)）
+    if strings.Contains(l, "[") || strings.Contains(l, "(") || strings.Contains(l, "config") { return false }
+    return true
 }

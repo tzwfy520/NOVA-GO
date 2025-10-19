@@ -28,7 +28,7 @@ type FormatBatchRequest struct {
 	TaskBatch    int              `json:"task_batch,omitempty"`
 	RetryFlag    *int             `json:"retry_flag,omitempty"`
 	SaveDir      string           `json:"save_dir"`
-	Timeout      *int             `json:"timeout,omitempty"`
+	TaskTimeout  *int             `json:"task_timeout,omitempty"`
 	FSMTemplates []FSMTemplateDef `json:"fsm_templates"`
 	Devices      []FormatDevice   `json:"devices"`
 }
@@ -43,6 +43,7 @@ type FormatDevice struct {
 	Password        string   `json:"password"`
 	EnablePassword  string   `json:"enable_password,omitempty"`
 	CliList         []string `json:"cli_list"`
+	DeviceTimeout   *int     `json:"device_timeout,omitempty"`
 }
 
 // FSM 模板定义：按平台与命令组织
@@ -112,7 +113,7 @@ type FormatFastRequest struct {
 	TaskID       string             `json:"task_id"`
 	TaskName     string             `json:"task_name,omitempty"`
 	RetryFlag    *int               `json:"retry_flag,omitempty"` // 仅用于采集重试，解析只进行一次
-	Timeout      *int               `json:"timeout,omitempty"`
+	TaskTimeout  *int               `json:"task_timeout,omitempty"`
 	Device       []FormatFastDevice `json:"device"` // 允许传入一个设备（数组便于扩展）
 	FSMTemplates []FSMTemplateDef   `json:"fsm_templates,omitempty"`
 }
@@ -129,6 +130,7 @@ type FormatFastDevice struct {
 	EnablePassword  string   `json:"enable_password,omitempty"`
 	Cli             string   `json:"cli,omitempty"`
 	CliList         []string `json:"cli_list,omitempty"`
+	DeviceTimeout   *int     `json:"device_timeout,omitempty"`
 }
 
 // FormatFastResponse 快速格式化响应
@@ -178,6 +180,7 @@ func NewFormatService(cfg *config.Config) *FormatService {
 		MaxIdle:     10,
 		MaxActive:   conc,
 		IdleTimeout: 5 * time.Minute,
+		CleanupInterval: cfg.SSH.CleanupInterval,
 		SSHConfig: &ssh.Config{
 			Timeout:        cfg.SSH.Timeout,
 			ConnectTimeout: cfg.SSH.ConnectTimeout,
@@ -292,7 +295,11 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 			}
 
 			// 执行采集（仅采集重试，解析仅在成功采集后进行一次）
-			timeout := s.effectiveTimeout(req.Timeout, dev.DevicePlatform)
+			timeout := s.effectiveTimeout(req.TaskTimeout, dev.DevicePlatform)
+			devTimeout := timeout
+			if dev.DeviceTimeout != nil && *dev.DeviceTimeout > 0 {
+				devTimeout = *dev.DeviceTimeout
+			}
 			// 默认回退：平台默认 -> collector.retry_flags
 			retries := s.effectiveRetries(req.RetryFlag, dev.DevicePlatform)
 			attempts := retries + 1
@@ -308,7 +315,8 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 					UserName:        dev.UserName,
 					Password:        dev.Password,
 					EnablePassword:  dev.EnablePassword,
-					TimeoutSec:      timeout,
+					TaskTimeoutSec:   timeout,
+					DeviceTimeoutSec: devTimeout,
 				}, dev.CliList)
 				if err == nil {
 					break
@@ -525,7 +533,11 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 	}
 
 	// 执行采集（仅采集重试，解析仅在成功采集后进行一次）
-	timeout := s.effectiveTimeout(req.Timeout, dev.DevicePlatform)
+	timeout := s.effectiveTimeout(req.TaskTimeout, dev.DevicePlatform)
+	devTimeout := timeout
+	if dev.DeviceTimeout != nil && *dev.DeviceTimeout > 0 {
+		devTimeout = *dev.DeviceTimeout
+	}
 	// 默认回退：平台默认 -> collector.retry_flags
 	retries := s.effectiveRetries(req.RetryFlag, dev.DevicePlatform)
 	attempts := retries + 1
@@ -541,7 +553,8 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 			UserName:        dev.UserName,
 			Password:        dev.Password,
 			EnablePassword:  dev.EnablePassword,
-			TimeoutSec:      timeout,
+			TaskTimeoutSec:   timeout,
+			DeviceTimeoutSec: devTimeout,
 		}, userCmds)
 		if err == nil {
 			break

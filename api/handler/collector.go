@@ -243,9 +243,9 @@ func (h *CollectorHandler) BatchExecute(c *gin.Context) {
 type CustomerBatchRequest struct {
 	TaskID    string           `json:"task_id"`
 	TaskName  string           `json:"task_name,omitempty"`
-	RetryFlag *int             `json:"retry_flag,omitempty"`
-	Timeout   *int             `json:"timeout,omitempty"`
-	Devices   []CustomerDevice `json:"devices"`
+	RetryFlag   *int             `json:"retry_flag,omitempty"`
+	TaskTimeout *int             `json:"task_timeout,omitempty"`
+	Devices     []CustomerDevice `json:"devices"`
 }
 
 // CustomerDevice 自定义采集设备参数
@@ -259,15 +259,16 @@ type CustomerDevice struct {
 	Password        string   `json:"password"`
 	EnablePassword  string   `json:"enable_password,omitempty"`
 	CliList         []string `json:"cli_list,omitempty"`
+	DeviceTimeout   *int     `json:"device_timeout,omitempty"`
 }
 
 // SystemBatchRequest 系统预制采集批量请求
 type SystemBatchRequest struct {
 	TaskID     string         `json:"task_id"`
 	TaskName   string         `json:"task_name,omitempty"`
-	RetryFlag  *int           `json:"retry_flag,omitempty"`
-	Timeout    *int           `json:"timeout,omitempty"`
-	DeviceList []SystemDevice `json:"device_list"`
+	RetryFlag   *int           `json:"retry_flag,omitempty"`
+	TaskTimeout *int           `json:"task_timeout,omitempty"`
+	DeviceList  []SystemDevice `json:"device_list"`
 }
 
 // SystemDevice 系统预制采集设备参数（cli_list 可选扩展）
@@ -281,6 +282,7 @@ type SystemDevice struct {
 	Password        string   `json:"password"`
 	EnablePassword  string   `json:"enable_password,omitempty"`
 	CliList         []string `json:"cli_list,omitempty"`
+	DeviceTimeout   *int     `json:"device_timeout,omitempty"`
 }
 
 // BatchExecuteCustomer 自定义采集批量接口
@@ -349,22 +351,23 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 
 			// 组装单设备请求（customer）
 			r := service.CollectRequest{
-				TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
-				TaskName:        req.TaskName,
-				CollectOrigin:   "", // 已弃用，由路由决定采集模式
-				DeviceIP:        d.DeviceIP,
-				Port:            d.Port,
-				DeviceName:      d.DeviceName,
-				DevicePlatform:  d.DevicePlatform,
-				CollectProtocol: d.CollectProtocol,
-				UserName:        d.UserName,
-				Password:        d.Password,
-				EnablePassword:  d.EnablePassword,
-				CliList:         d.CliList,
-				RetryFlag:       req.RetryFlag,
-				Timeout:         req.Timeout,
-				Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "customer"},
-			}
+			TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
+			TaskName:        req.TaskName,
+			CollectOrigin:   "", // 已弃用，由路由决定采集模式
+			DeviceIP:        d.DeviceIP,
+			Port:            d.Port,
+			DeviceName:      d.DeviceName,
+			DevicePlatform:  d.DevicePlatform,
+			CollectProtocol: d.CollectProtocol,
+			UserName:        d.UserName,
+			Password:        d.Password,
+			EnablePassword:  d.EnablePassword,
+			CliList:         d.CliList,
+			RetryFlag:       req.RetryFlag,
+			TaskTimeout:     req.TaskTimeout,
+			DeviceTimeout:   d.DeviceTimeout,
+			Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "customer"},
+		}
 
 			if err := h.validateCollectRequest(&r); err != nil {
 				responses[i] = map[string]interface{}{
@@ -529,22 +532,23 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 
 			// 组装单设备请求（system）
 			r := service.CollectRequest{
-				TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
-				TaskName:        req.TaskName,
-				CollectOrigin:   "", // 已弃用，由路由决定采集模式
-				DeviceIP:        d.DeviceIP,
-				Port:            d.Port,
-				DeviceName:      d.DeviceName,
-				DevicePlatform:  d.DevicePlatform,
-				CollectProtocol: d.CollectProtocol,
-				UserName:        d.UserName,
-				Password:        d.Password,
-				EnablePassword:  d.EnablePassword,
-				CliList:         cliCombined, // 预组装系统命令 + 扩展命令
-				RetryFlag:       req.RetryFlag,
-				Timeout:         req.Timeout,
-				Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "system"},
-			}
+			TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
+			TaskName:        req.TaskName,
+			CollectOrigin:   "", // 已弃用，由路由决定采集模式
+			DeviceIP:        d.DeviceIP,
+			Port:            d.Port,
+			DeviceName:      d.DeviceName,
+			DevicePlatform:  d.DevicePlatform,
+			CollectProtocol: d.CollectProtocol,
+			UserName:        d.UserName,
+			Password:        d.Password,
+			EnablePassword:  d.EnablePassword,
+			CliList:         cliCombined, // 预组装系统命令 + 扩展命令
+			RetryFlag:       req.RetryFlag,
+			TaskTimeout:     req.TaskTimeout,
+			DeviceTimeout:   d.DeviceTimeout,
+			Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "system"},
+		}
 
 			if err := h.validateCollectRequest(&r); err != nil {
 				responses[i] = map[string]interface{}{
@@ -647,8 +651,11 @@ func (h *CollectorHandler) validateCollectRequest(request *service.CollectReques
 		return fmt.Errorf("端口号必须在1-65535之间")
 	}
 	// timeout 上限
-	if request.Timeout != nil && *request.Timeout > 300 {
-		return fmt.Errorf("超时时间不能超过300秒")
+	if request.TaskTimeout != nil && *request.TaskTimeout > 300 {
+		return fmt.Errorf("任务超时时间不能超过300秒")
+	}
+	if request.DeviceTimeout != nil && *request.DeviceTimeout > 300 {
+		return fmt.Errorf("设备超时时间不能超过300秒")
 	}
 	// retry 非负
 	if request.RetryFlag != nil && *request.RetryFlag < 0 {

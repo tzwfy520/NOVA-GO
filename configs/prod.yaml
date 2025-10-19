@@ -52,6 +52,7 @@ database:
 ssh:
   timeout: 30s
   keep_alive_interval: 10s
+  cleanup_interval: 30s
   max_sessions: 200
 
 

@@ -48,7 +48,8 @@ type CollectRequest struct {
 	EnablePassword  string                 `json:"enable_password,omitempty"`
 	CliList         []string               `json:"cli_list"`
 	RetryFlag       *int                   `json:"retry_flag,omitempty"`
-	Timeout         *int                   `json:"timeout,omitempty"`
+	TaskTimeout     *int                   `json:"task_timeout,omitempty"`
+	DeviceTimeout   *int                   `json:"device_timeout,omitempty"`
 	Metadata        map[string]interface{} `json:"metadata"`
 }
 
@@ -282,6 +283,7 @@ func NewCollectorService(cfg *config.Config) *CollectorService {
 		MaxIdle:     10,
 		MaxActive:   conc,
 		IdleTimeout: 5 * time.Minute,
+		CleanupInterval: cfg.SSH.CleanupInterval,
 		SSHConfig: &ssh.Config{
 			Timeout:        cfg.SSH.Timeout,
 			ConnectTimeout: cfg.SSH.ConnectTimeout,
@@ -366,8 +368,8 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 	interactDefaults := getPlatformDefaults(platform)
 	// 计算有效超时与重试（用于队列等待与任务上下文）
 	effTimeout := 30
-	if request.Timeout != nil && *request.Timeout > 0 {
-		effTimeout = *request.Timeout
+	if request.TaskTimeout != nil && *request.TaskTimeout > 0 {
+		effTimeout = *request.TaskTimeout
 	} else if interactDefaults.Timeout > 0 {
 		effTimeout = interactDefaults.Timeout
 	}
@@ -555,8 +557,8 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 
 	// 计算有效超时（与 ExecuteTask 逻辑保持一致）
 	effTimeoutSec := 30
-	if request.Timeout != nil && *request.Timeout > 0 {
-		effTimeoutSec = *request.Timeout
+	if request.TaskTimeout != nil && *request.TaskTimeout > 0 {
+		effTimeoutSec = *request.TaskTimeout
 	} else {
 		p := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
 		platformKey := p
@@ -568,6 +570,10 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 			effTimeoutSec = d.Timeout
 		}
 	}
+	devTimeoutSec := effTimeoutSec
+	if request.DeviceTimeout != nil && *request.DeviceTimeout > 0 {
+		devTimeoutSec = *request.DeviceTimeout
+	}
 	// 统一交互入口：通过 InteractBasic 执行并完成预命令与行过滤
 	execReq := &ExecRequest{
 		DeviceIP:        request.DeviceIP,
@@ -578,7 +584,8 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 		UserName:        request.UserName,
 		Password:        request.Password,
 		EnablePassword:  request.EnablePassword,
-		TimeoutSec:      effTimeoutSec,
+		TaskTimeoutSec:   effTimeoutSec,
+		DeviceTimeoutSec: devTimeoutSec,
 	}
 
 	// 使用请求中的 retries 参数进行重试（至少执行一次）

@@ -263,6 +263,7 @@ curl -X POST http://115.190.80.219:18000/api/v1/collector/execute \
 ssh:
   timeout: 30
   keep_alive_interval: 300
+  cleanup_interval: 30
   max_sessions: 10
 ```
 

@@ -54,27 +54,33 @@ type CommandResult struct {
 // InteractiveOptions 交互会话选项
 // 目前支持在执行 "enable" 时识别密码提示并自动输入 enable 密码
 type InteractiveOptions struct {
-    EnablePassword string
-    // 登录密码（Linux sudo 场景下可能需要用户密码而非“enable”口令）
-    LoginPassword string
-    // 通用提权配置：当当前命令等于 EnableCLI 时，进入提权流程
-    // EnableExpectOutput 用于匹配密码提示（大小写不敏感，包含匹配）
-    EnableCLI         string
-    EnableExpectOutput string
-    ExitCommands   []string
-    // 新增：命令间隔与自动交互
-    CommandIntervalMS int
-    AutoInteractions  []AutoInteraction
-    // 是否启用“延迟回显跳过”（提示符+上一条命令回显），按平台控制
-    SkipDelayedEcho bool
-    // 新增：交互时序参数（可选，未设置则使用默认值）
-    QuietAfterMS              int // 静默完成阈值，默认800ms
-    QuietPollIntervalMS       int // 静默检测轮询间隔，默认250ms
-    PerCommandTimeoutSec      int // 单条命令超时，默认30s
-    EnablePasswordFallbackMS  int // enable密码提示未出现的回退发送延迟，默认1500ms
-    PromptInducerIntervalMS   int // 初始提示符诱发器间隔，默认1000ms
-    PromptInducerMaxCount     int // 初始提示符诱发器最大次数，默认12
-    ExitPauseMS               int // 退出命令发送间隔，默认150ms
+    DisablePagingCmds []string
+    PromptSuffixes    []string
+    EnableCmd         string
+    EnablePassword    string
+    ConfigExitCLI     string
+    ExitCommands      []string
+    ExitPauseMS       int
+    SkipDelayedEcho   bool
+    // 新增：设备名用于提示符判定（用户/配置模式）
+    DeviceName        string
+    // 以下字段在交互控制中已被使用，需要在结构体中声明
+    // 提权与自动交互
+    EnableCLI             string
+    EnableExpectOutput    string
+    LoginPassword         string
+    AutoInteractions      []AutoInteraction
+    // 发送节奏与超时
+    CommandIntervalMS     int
+    PerCommandTimeoutSec  int
+    QuietAfterMS          int
+    QuietPollIntervalMS   int
+    // enable 密码回退与提示符诱发器
+    EnablePasswordFallbackMS int
+    PromptInducerIntervalMS  int
+    PromptInducerMaxCount    int
+    // 条件退出配置模式
+    ConfigExitConditional bool
 }
 
 // AutoInteraction 自动交互对
@@ -588,35 +594,31 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 	// 发送 CRLF 促使设备输出当前提示符，便于后续检测（网络设备通常期望 CRLF）
     stdin.Write([]byte("\r\n"))
 
-    // 提示符诱发器参数（可调）
-    piInterval := time.Second
-    piMaxCount := 12
+    // 提示符诱发参数
+    piInterval := 1000 * time.Millisecond
+    piMax := 12
     if opts != nil {
         if opts.PromptInducerIntervalMS > 0 { piInterval = time.Duration(opts.PromptInducerIntervalMS) * time.Millisecond }
-        if opts.PromptInducerMaxCount > 0 { piMaxCount = opts.PromptInducerMaxCount }
+        if opts.PromptInducerMaxCount > 0 { piMax = opts.PromptInducerMaxCount }
     }
-	// 提示符诱发器：在初始阶段定期发送 CRLF，帮助设备输出提示符
-	// 某些设备在建立 PTY 后需要键入回车才能显示提示符
-	stopTrigger := make(chan struct{})
-	go func() {
-		defer func() { recover() }()
-		ticker := time.NewTicker(piInterval)
-		defer ticker.Stop()
-		// 最多诱发 piMaxCount 次，避免过度刷屏
-		count := 0
-		for {
-			select {
-			case <-stopTrigger:
-				return
-			case <-ticker.C:
-				if count >= piMaxCount {
-					return
-				}
-    stdin.Write([]byte("\r\n"))
-				count++
-			}
-		}
-	}()
+
+    stopTrigger := make(chan struct{})
+    go func() {
+        defer func() { recover() }()
+        ticker := time.NewTicker(piInterval)
+        defer ticker.Stop()
+        count := 0
+        for {
+            select {
+            case <-stopTrigger:
+                return
+            case <-ticker.C:
+                if count >= piMax { return }
+                stdin.Write([]byte("\r\n"))
+                count++
+            }
+        }
+    }()
 
 	// 读取输出的协程，将数据按行推送到通道
 	lineCh := make(chan string, 4096)
@@ -801,9 +803,33 @@ StartCommands:
     results := make([]*CommandResult, 0, len(commands))
     // 记录上一条已发送命令，用于跳过其延迟回显（常见于网络设备在提示符后一并回显上一条命令）
     prevCmd := ""
+    // 新增：记录最近一次提示符行，用于条件退出判定
+    lastPromptLine := ""
+    // 本地比较与提示符判定辅助
+    eq := func(a, b string) bool { return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b)) }
+    // 使用客户端方法，结合设备名与提示符后缀进行精确判定
+    isConfigPromptLine := func(line string) bool { return c.isConfigPromptLine(line, opts) }
     for _, cmd := range commands {
         logger.Debugf("SSH Interactive: send command: %s", cmd)
         // 写入命令；若写入失败，认为会话已不可用，返回错误以触发上层回退
+        if opts != nil && opts.ConfigExitConditional && opts.ConfigExitCLI != "" && eq(cmd, opts.ConfigExitCLI) {
+            // 判定是否已经不在配置模式，若是则跳过发送退出配置命令
+            if lastPromptLine != "" && !isConfigPromptLine(lastPromptLine) {
+                results = append(results, &CommandResult{
+                    Command:  cmd,
+                    Output:   "",
+                    Error:    "",
+                    ExitCode: 0,
+                    Duration: 0,
+                })
+                // 对齐后续节奏：记录上一条命令并应用命令间隔
+                prevCmd = cmd
+                if opts != nil && opts.CommandIntervalMS > 0 {
+                    time.Sleep(time.Duration(opts.CommandIntervalMS) * time.Millisecond)
+                }
+                continue
+            }
+        }
         if _, err := stdin.Write([]byte(cmd + "\r\n")); err != nil {
             // 关闭输入并等待读取协程结束，避免资源泄露
             stdin.Close()
@@ -894,50 +920,52 @@ StartCommands:
                 clean := sanitize(line)
                 lastCleanLine = clean
                 lastRecvAt = time.Now()
-				// 若出现“提示符+上一条命令”的延迟回显，直接跳过，避免写入当前命令的输出
-				// 例如："hostname#terminal length 0" 在下一条命令开始时到达
-				if opts != nil && opts.SkipDelayedEcho && clean != "" && prevCmd != "" {
-					candidate := stripPromptPrefix(clean)
-					pc := strings.TrimSpace(strings.ToLower(prevCmd))
-					cc := strings.TrimSpace(strings.ToLower(candidate))
-					if cc != "" {
-						if cc == pc || strings.HasPrefix(pc, cc) || strings.HasPrefix(cc, pc) {
-							// 这是上一条命令的回显或其碎片，跳过
-							continue
-						}
-					}
-				}
-				// 处理命令回显：剥离提示符前缀，支持被拆分到多行的回显
-				if echoRemain != "" && clean != "" {
-					candidate := stripPromptPrefix(clean)
-					cmdTrim := strings.TrimSpace(cmd)
-					// 1) 常见：candidate 是 echoRemain 的前缀 → 吞掉并继续
-					if candidate != "" && strings.HasPrefix(strings.TrimSpace(echoRemain), candidate) {
-						// 规范化前缀移除（按可见文本移除）
-						er := strings.TrimSpace(echoRemain)
-						er = strings.TrimPrefix(er, candidate)
-						echoRemain = er
-						continue
-					}
-					// 2) 候选包含完整命令（提示符+命令同行）→ 吞掉并结束回显
-					if candidate != "" && strings.Contains(strings.ToLower(candidate), strings.ToLower(cmdTrim)) {
-						echoRemain = ""
-						continue
-					}
-					// 3) 命令包含候选（命令被拆分成若干小段）→ 吞掉并继续
-					if candidate != "" && strings.Contains(strings.ToLower(cmdTrim), strings.ToLower(candidate)) {
-						// 不易精确扣减，直接继续吞掉，等待后续小段补齐
-						continue
-					}
-					// 4) 其他情况：认为回显已结束，从此行计入输出
-					echoRemain = ""
-				}
-				// 若尚未看到内容且遇到提示符，认为是前序残留提示符，跳过
-				if isPrompt(clean) && !sawContent {
-					continue
-				}
-				// 若是提示符行（命令结束标志），不要写入输出，直接结束该命令
+                // 若出现“提示符+上一条命令”的延迟回显，直接跳过，避免写入当前命令的输出
+                // 例如："hostname#terminal length 0" 在下一条命令开始时到达
+                if opts != nil && opts.SkipDelayedEcho && clean != "" && prevCmd != "" {
+                    candidate := stripPromptPrefix(clean)
+                    pc := strings.TrimSpace(strings.ToLower(prevCmd))
+                    cc := strings.TrimSpace(strings.ToLower(candidate))
+                    if cc != "" {
+                        if cc == pc || strings.HasPrefix(pc, cc) || strings.HasPrefix(cc, pc) {
+                            // 这是上一条命令的回显或其碎片，跳过
+                            continue
+                        }
+                    }
+                }
+                // 处理命令回显：剥离提示符前缀，支持被拆分到多行的回显
+                if echoRemain != "" && clean != "" {
+                    candidate := stripPromptPrefix(clean)
+                    cmdTrim := strings.TrimSpace(cmd)
+                    // 1) 常见：candidate 是 echoRemain 的前缀 → 吞掉并继续
+                    if candidate != "" && strings.HasPrefix(strings.TrimSpace(echoRemain), candidate) {
+                        // 规范化前缀移除（按可见文本移除）
+                        er := strings.TrimSpace(echoRemain)
+                        er = strings.TrimPrefix(er, candidate)
+                        echoRemain = er
+                        continue
+                    }
+                    // 2) 候选包含完整命令（提示符+命令同行）→ 吞掉并结束回显
+                    if candidate != "" && strings.Contains(strings.ToLower(candidate), strings.ToLower(cmdTrim)) {
+                        echoRemain = ""
+                        continue
+                    }
+                    // 3) 命令包含候选（命令被拆分成若干小段）→ 吞掉并继续
+                    if candidate != "" && strings.Contains(strings.ToLower(cmdTrim), strings.ToLower(candidate)) {
+                        // 不易精确扣减，直接继续吞掉，等待后续小段补齐
+                        continue
+                    }
+                    // 4) 其他情况：认为回显已结束，从此行计入输出
+                    echoRemain = ""
+                }
+                // 若尚未看到内容且遇到提示符，认为是前序残留提示符，跳过
+                if isPrompt(clean) && !sawContent {
+                    continue
+                }
+                // 若是提示符行（命令结束标志），不要写入输出，直接结束该命令
                 if isPrompt(clean) {
+                    // 更新最近提示符行，用于后续条件退出判断
+                    lastPromptLine = clean
                     // 针对提权命令：校验提示符是否进入特权模式（以 '#' 结尾）
                     errStr := ""
                     exitCode := 0
@@ -969,10 +997,10 @@ StartCommands:
                     sawContent = true
                 }
 
-				// 在执行 enable 时，遇到密码提示则自动输入密码
-				// 扩展识别范围："Password:", "Enter password:", "Password required", "Secret:", "enable secret", 中文"密码"
-				trimmed := clean
-				lower := strings.ToLower(trimmed)
+                // 在执行 enable 时，遇到密码提示则自动输入密码
+                // 扩展识别范围："Password:", "Enter password:", "Password required", "Secret:", "enable secret", 中文"密码"
+                trimmed := clean
+                lower := strings.ToLower(trimmed)
                 // 在提权命令或其后续紧邻命令（前一条为 enable）中识别密码提示
             prevIsEnable := false
             if opts != nil {
@@ -1204,4 +1232,199 @@ func (c *Client) GetConnectionStats() map[string]interface{} {
 	}
 
 	return stats
+}
+
+// DetectPrompt 通过开启一次交互式 Shell，诱发并捕获当前提示符行
+// 返回清洗后(去控制序列)的提示符字符串；若超时或失败返回错误
+func (c *Client) DetectPrompt(ctx context.Context, promptSuffixes []string, opts *InteractiveOptions) (string, error) {
+    if c == nil {
+        return "", fmt.Errorf("SSH client is nil")
+    }
+    if c.connection == nil {
+        return "", fmt.Errorf("SSH connection not established")
+    }
+
+    session, err := c.newSessionWithRetry()
+    if err != nil {
+        return "", fmt.Errorf("failed to create session: %w", err)
+    }
+    defer session.Close()
+
+    modes := ssh.TerminalModes{
+        ssh.ECHO:          1,
+        ssh.TTY_OP_ISPEED: 14400,
+        ssh.TTY_OP_OSPEED: 14400,
+    }
+    {
+        var lastErr error
+        for _, term := range []string{"vt100", "xterm", "ansi", "dumb"} {
+            if ptyErr := session.RequestPty(term, 80, 24, modes); ptyErr == nil {
+                lastErr = nil
+                break
+            } else {
+                lastErr = ptyErr
+            }
+        }
+        if lastErr != nil {
+            return "", fmt.Errorf("failed to request pty: %w", lastErr)
+        }
+    }
+
+    stdin, err := session.StdinPipe()
+    if err != nil { return "", fmt.Errorf("failed to get stdin: %w", err) }
+    stdout, err := session.StdoutPipe()
+    if err != nil { return "", fmt.Errorf("failed to get stdout: %w", err) }
+    stderr, err := session.StderrPipe()
+    if err != nil { return "", fmt.Errorf("failed to get stderr: %w", err) }
+
+    if err := session.Shell(); err != nil {
+        return "", fmt.Errorf("failed to start shell: %w", err)
+    }
+
+    // 提示符诱发参数
+    piInterval := 1000 * time.Millisecond
+    piMax := 12
+    if opts != nil {
+        if opts.PromptInducerIntervalMS > 0 { piInterval = time.Duration(opts.PromptInducerIntervalMS) * time.Millisecond }
+        if opts.PromptInducerMaxCount > 0 { piMax = opts.PromptInducerMaxCount }
+    }
+
+    stop := make(chan struct{})
+    go func() {
+        defer func() { recover() }()
+        ticker := time.NewTicker(piInterval)
+        defer ticker.Stop()
+        count := 0
+        for {
+            select {
+            case <-stop:
+                return
+            case <-ticker.C:
+                if count >= piMax { return }
+                stdin.Write([]byte("\r\n"))
+                count++
+            }
+        }
+    }()
+
+    lineCh := make(chan string, 2048)
+    doneCh := make(chan struct{})
+    // stdout reader
+    go func() {
+        buf := make([]byte, 2048)
+        var acc strings.Builder
+        for {
+            n, err := stdout.Read(buf)
+            if n > 0 {
+                acc.Write(buf[:n])
+                s := acc.String()
+                s = strings.ReplaceAll(s, "\r\n", "\n")
+                s = strings.ReplaceAll(s, "\r", "")
+                lines := strings.Split(s, "\n")
+                acc.Reset()
+                if len(lines) > 0 { acc.WriteString(lines[len(lines)-1]) }
+                for i := 0; i < len(lines)-1; i++ { lineCh <- lines[i] }
+            }
+            if err != nil { break }
+        }
+    }()
+    // stderr reader
+    go func() {
+        buf := make([]byte, 2048)
+        var acc strings.Builder
+        for {
+            n, err := stderr.Read(buf)
+            if n > 0 {
+                acc.Write(buf[:n])
+                s := acc.String()
+                s = strings.ReplaceAll(s, "\r\n", "\n")
+                s = strings.ReplaceAll(s, "\r", "")
+                lines := strings.Split(s, "\n")
+                acc.Reset()
+                if len(lines) > 0 { acc.WriteString(lines[len(lines)-1]) }
+                for i := 0; i < len(lines)-1; i++ { lineCh <- lines[i] }
+            }
+            if err != nil { break }
+        }
+    }()
+
+    // 行清洗：移除 ANSI 与不可见控制符
+    sanitize := func(s string) string {
+        var b strings.Builder
+        b.Grow(len(s))
+        skip := false
+        for _, r := range s {
+            if skip {
+                if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') { skip = false }
+                continue
+            }
+            if r == 0x1b { skip = true; continue }
+            if r < 0x20 && r != '\t' { continue }
+            b.WriteRune(r)
+        }
+        return b.String()
+    }
+
+    // 轮询提示符
+    start := time.Now()
+    for {
+        select {
+        case <-ctx.Done():
+            close(stop)
+            stdin.Close()
+            session.Close()
+            return "", ctx.Err()
+        case line := <-lineCh:
+            trimmed := strings.TrimSpace(sanitize(line))
+            if trimmed == "" { continue }
+            for _, suf := range promptSuffixes {
+                if strings.HasSuffix(trimmed, suf) {
+                    close(stop)
+                    stdin.Close()
+                    // 等待读取结束片刻
+                    select { case <-doneCh: case <-time.After(200 * time.Millisecond): }
+                    return trimmed, nil
+                }
+            }
+        case <-time.After(3 * time.Second):
+            if time.Since(start) > 10*time.Second {
+                close(stop)
+                stdin.Close()
+                session.Close()
+                return "", fmt.Errorf("prompt detection timeout")
+            }
+        }
+    }
+}
+
+// 根据设备名和提示符后缀判断是否处于配置模式：
+// 规则：当设备名与提示符后缀之间存在任何字符，视为配置模式；
+//       当仅为设备名紧接提示符后缀（无中间字符），视为用户/特权模式。
+func (c *Client) isConfigPromptLine(line string, opts *InteractiveOptions) bool {
+    s := strings.TrimSpace(line)
+    if s == "" { return false }
+    l := strings.ToLower(s)
+
+    // 优先使用设备名 + 提示符后缀精确判定
+    if opts != nil && strings.TrimSpace(opts.DeviceName) != "" {
+        host := strings.ToLower(strings.TrimSpace(opts.DeviceName))
+        var sufUsed string
+        for _, suf := range opts.PromptSuffixes {
+            if strings.HasSuffix(s, suf) { sufUsed = suf; break }
+        }
+        if sufUsed != "" {
+            idx := strings.LastIndex(l, host)
+            if idx >= 0 {
+                // 提取设备名和提示符后缀之间的内容
+                between := strings.TrimSpace(s[idx+len(host) : len(s)-len(sufUsed)])
+                if between != "" { return true } // 存在中间字符，配置模式
+                return false                       // 无中间字符，用户/特权模式
+            }
+        }
+    }
+
+    // 回退启发式：常见配置模式特征
+    if strings.Contains(l, "(config") { return true }
+    if strings.Contains(s, "[") { return true }
+    return false
 }

@@ -17,6 +17,7 @@ type Pool struct {
 	maxIdle     int
 	maxActive   int
 	idleTimeout time.Duration
+	cleanupInterval time.Duration
 }
 
 // pooledConnection 池化的连接
@@ -30,10 +31,11 @@ type pooledConnection struct {
 
 // PoolConfig 连接池配置
 type PoolConfig struct {
-	MaxIdle     int           `yaml:"max_idle"`
-	MaxActive   int           `yaml:"max_active"`
-	IdleTimeout time.Duration `yaml:"idle_timeout"`
-	SSHConfig   *Config       `yaml:"ssh"`
+	MaxIdle        int           `yaml:"max_idle"`
+	MaxActive      int           `yaml:"max_active"`
+	IdleTimeout    time.Duration `yaml:"idle_timeout"`
+	CleanupInterval time.Duration `yaml:"cleanup_interval"`
+	SSHConfig      *Config       `yaml:"ssh"`
 }
 
 // NewPool 创建SSH连接池
@@ -45,6 +47,11 @@ func NewPool(config *PoolConfig) *Pool {
 		maxActive:   config.MaxActive,
 		idleTimeout: config.IdleTimeout,
 	}
+	ci := config.CleanupInterval
+	if ci <= 0 {
+		ci = 30 * time.Second
+	}
+	pool.cleanupInterval = ci
 
 	// 启动清理协程
 	go pool.cleanup()
@@ -231,7 +238,8 @@ func (p *Pool) getIdleCount() int {
 
 // cleanup 清理过期连接
 func (p *Pool) cleanup() {
-	ticker := time.NewTicker(30 * time.Second)
+	// 使用可配置清理周期（默认 30s）
+	ticker := time.NewTicker(p.cleanupInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
