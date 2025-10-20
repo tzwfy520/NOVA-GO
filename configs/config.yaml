@@ -67,7 +67,7 @@ collector:
       # enable_cli: "enable"            # 或 Linux: "sudo -i"
       # except_output: "Password:"      # 接收到该输出后自动输入 enable 密码
       enable_cli: "enable"
-      except_output: "Password:"
+      enable_except_output: "Password:"
       skip_delayed_echo: true
       # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
       # timeout:
@@ -200,10 +200,10 @@ collector:
       enable_required: true
       # 当需要提权时，设置提权命令与提示匹配
       # 示例：
-      # 使用 -S 通过 stdin 输送密码；-p '' 关闭提示以减少干扰
-      enable_cli: "sudo -S -p '' -i"
-      # 保留通用密码提示匹配，以兼容不同发行版的提示样式
-      except_output: "Password:"
+      # 使用 -S 通过 stdin 输送密码；-p 'Password:' 显示密码提示
+      enable_cli: "sudo -S -p 'Password:' -i"
+      # sudo密码提示匹配
+      enable_except_output: "Password:"
       skip_delayed_echo: true
       # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
       # timeout:

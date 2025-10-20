@@ -594,9 +594,9 @@ func NewBackupService(cfg *config.Config) *BackupService {
 		threads = cfg.SSH.MaxSessions
 	}
 	poolConfig := &ssh.PoolConfig{
-		MaxIdle:     10,
-		MaxActive:   conc,
-		IdleTimeout: 5 * time.Minute,
+		MaxIdle:         10,
+		MaxActive:       conc,
+		IdleTimeout:     5 * time.Minute,
 		CleanupInterval: cfg.SSH.CleanupInterval,
 		SSHConfig: &ssh.Config{
 			Timeout:        cfg.SSH.Timeout,
@@ -723,7 +723,7 @@ func (s *BackupService) ExecuteBatch(ctx context.Context, req *BackupBatchReques
 				UserName:        dev.UserName,
 				Password:        dev.Password,
 				EnablePassword:  dev.EnablePassword,
-				TaskTimeoutSec:   s.effectiveTimeout(req.TaskTimeout, dev.DevicePlatform),
+				TaskTimeoutSec:  s.effectiveTimeout(req.TaskTimeout, dev.DevicePlatform),
 				DeviceTimeoutSec: func() int {
 					if dev.DeviceTimeout != nil && *dev.DeviceTimeout > 0 {
 						return *dev.DeviceTimeout

@@ -42,7 +42,7 @@ type CollectRequest struct {
 	DeviceName      string                 `json:"device_name,omitempty"`
 	DevicePlatform  string                 `json:"device_platform,omitempty"`
 	CollectProtocol string                 `json:"collect_protocol,omitempty"` // ssh
-    Port            int                    `json:"device_port,omitempty"`
+	Port            int                    `json:"device_port,omitempty"`
 	UserName        string                 `json:"user_name"`
 	Password        string                 `json:"password"`
 	EnablePassword  string                 `json:"enable_password,omitempty"`
@@ -280,9 +280,9 @@ func NewCollectorService(cfg *config.Config) *CollectorService {
 		threads = cfg.SSH.MaxSessions
 	}
 	poolConfig := &ssh.PoolConfig{
-		MaxIdle:     10,
-		MaxActive:   conc,
-		IdleTimeout: 5 * time.Minute,
+		MaxIdle:         10,
+		MaxActive:       conc,
+		IdleTimeout:     5 * time.Minute,
 		CleanupInterval: cfg.SSH.CleanupInterval,
 		SSHConfig: &ssh.Config{
 			Timeout:        cfg.SSH.Timeout,
@@ -576,14 +576,14 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 	}
 	// 统一交互入口：通过 InteractBasic 执行并完成预命令与行过滤
 	execReq := &ExecRequest{
-		DeviceIP:        request.DeviceIP,
-		Port:            port,
-		DeviceName:      request.DeviceName,
-		DevicePlatform:  request.DevicePlatform,
-		CollectProtocol: request.CollectProtocol,
-		UserName:        request.UserName,
-		Password:        request.Password,
-		EnablePassword:  request.EnablePassword,
+		DeviceIP:         request.DeviceIP,
+		Port:             port,
+		DeviceName:       request.DeviceName,
+		DevicePlatform:   request.DevicePlatform,
+		CollectProtocol:  request.CollectProtocol,
+		UserName:         request.UserName,
+		Password:         request.Password,
+		EnablePassword:   request.EnablePassword,
 		TaskTimeoutSec:   effTimeoutSec,
 		DeviceTimeoutSec: devTimeoutSec,
 	}

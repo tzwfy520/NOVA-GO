@@ -488,7 +488,7 @@ type PlatformDefaultsConfig struct {
     Interact InteractConfig `mapstructure:"interact"`
     // Enable/Sudo 提权命令与提示匹配
     EnableCLI          string `mapstructure:"enable_cli"`
-    EnableExceptOutput string `mapstructure:"except_output"`
+    EnableExceptOutput string `mapstructure:"enable_except_output"`
     // 进入配置模式命令（按序尝试）
     ConfigModeCLIs []string `mapstructure:"config_mode_clis"`
     // 退出配置模式命令（新增）
