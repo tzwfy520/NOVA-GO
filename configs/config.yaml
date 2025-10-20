@@ -7,6 +7,7 @@ server:
   mode: "release"  # 运行模式：debug, release, test（影响Gin日志与恢复）
   read_timeout: 60s  # 服务端读取请求头/体的超时；防止慢请求拖垮连接
   write_timeout: 120s # 服务端写出响应的超时；建议≥批量任务最长执行窗口
+  simulate_enable: true  # 模拟服务开关：true 启用 simulate/simulate.yaml 定义的 SSH 模拟服务
 
 # 采集器配置
 collector:

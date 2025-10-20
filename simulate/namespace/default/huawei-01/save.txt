@@ -1,0 +1,3 @@
+The current configuration will be saved.
+Save? [Y/N]: Y
+Info: Save the configuration successfully.

@@ -450,16 +450,3 @@ func (b *InteractBasic) EnterConfigMode(ctx context.Context, req *ExecRequest) (
     }
     return res, nil
 }
-
-// isUserOrPrivPrompt 判断是否“仅主机名 + 提示符后缀”，用于退出配置模式成功判断
-func isUserOrPrivPrompt(line string, suffixes []string) bool {
-    s := strings.TrimSpace(line)
-    if s == "" { return false }
-    found := false
-    for _, suf := range suffixes { if strings.HasSuffix(s, suf) { found = true; break } }
-    if !found { return false }
-    l := strings.ToLower(s)
-    // 排除典型配置模式特征：包含 "["（如 [HUAWEI]）或 "("（如 (config)）
-    if strings.Contains(l, "[") || strings.Contains(l, "(") || strings.Contains(l, "config") { return false }
-    return true
-}

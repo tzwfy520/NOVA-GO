@@ -1,0 +1,2 @@
+Device ID        Local Intrfce   Holdtime   Capability  Platform    Port ID
+Switch2          Gi1/0/2         131        S I         WS-C2960X   Gi1/0/1

@@ -1,0 +1,3 @@
+Interface                PHY     Protocol   IP Address      Description
+GE0/0/1                  up      up         10.0.0.2/24     Uplink
+GE0/0/2                  down    down       unassigned      --

@@ -1,0 +1,13 @@
+!
+version 15.2
+hostname cisco-01
+!
+interface GigabitEthernet1/0/1
+ description Uplink
+ ip address 10.0.0.1 255.255.255.0
+!
+line vty 0 4
+ login local
+ transport input ssh
+!
+end

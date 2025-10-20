@@ -1,0 +1,28 @@
+# 模拟服务配置
+# 说明：SSH 登录时使用 device_name 作为用户名，以匹配设备类型与提示符。
+# 例如：ssh -p 22001 simulte-dev-cisco-01@127.0.0.1
+
+namespace:
+  default:
+    port: 22001
+    idle_seconds: 180
+    max_conn: 5
+  test-user:
+    port: 22002
+    idle_seconds: 180
+    max_conn: 5
+
+device_type:
+  cisco_ios:
+    prompt_suffixe: ">"
+    enable_mode_required: true
+    enable_mode_suffixe: "#"
+  huawei:
+    prompt_suffixe: ">"
+    enable_mode_required: false
+
+device_name:
+  cisco-01:
+    device_type: cisco_ios
+  huawei-01:
+    device_type: huawei

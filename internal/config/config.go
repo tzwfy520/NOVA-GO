@@ -30,6 +30,7 @@ type ServerConfig struct {
 	Mode         string        `mapstructure:"mode"`
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
+	SimulateEnable bool        `mapstructure:"simulate_enable"`
 }
 
 // CollectorConfig 采集器配置
@@ -310,6 +311,9 @@ func setDefaults() {
 
 	// 新增：连接池清理周期默认 30s（可通过 ssh.cleanup_interval 覆盖）
 	viper.SetDefault("ssh.cleanup_interval", 30*time.Second)
+
+	// 新增：模拟服务开关默认关闭
+	viper.SetDefault("server.simulate_enable", false)
 
 	// 移除旧键：不再设置 ssh.connect_timeout 默认值
 	// （若配置文件仍包含旧键，将在 Load 阶段被新的嵌套键覆盖）

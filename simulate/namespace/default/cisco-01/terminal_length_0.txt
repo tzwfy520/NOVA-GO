@@ -1,0 +1,121 @@
+Set terminal length to 0
+TXT
+
+cat > simulate/namespace/default/cisco-01/show_version.txt <<\"TXT\"
+Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.2(6)E2
+ROM: Bootstrap program is C2960X boot loader
+Switch uptime is 1 week, 2 days
+System image file is \"flash:c2960x-universalk9-mz.152-6.E2.bin\"
+Processor board ID FOC1234XYZ
+TXT
+
+cat > simulate/namespace/default/cisco-01/show_running-config.txt <<\"TXT\"
+!
+version 15.2
+hostname cisco-01
+!
+interface GigabitEthernet1/0/1
+ description Uplink
+ ip address 10.0.0.1 255.255.255.0
+!
+line vty 0 4
+ login local
+ transport input ssh
+!
+end
+TXT
+
+cat > simulate/namespace/default/cisco-01/show_ip_interface_brief.txt <<\"TXT\"
+Interface              IP-Address      OK? Method Status                Protocol
+GigabitEthernet1/0/1   10.0.0.1        YES manual up                    up
+GigabitEthernet1/0/2   unassigned      YES unset  administratively down down
+Vlan10                 10.0.10.1       YES manual up                    up
+TXT
+
+cat > simulate/namespace/default/cisco-01/show_interface_status.txt <<\"TXT\"
+Port      Name               Status       Vlan       Duplex  Speed   Type
+Gi1/0/1   Uplink             connected    trunk      a-full  a-1000  10/100/1000BaseTX
+Gi1/0/2                      disabled     1          auto    auto    10/100/1000BaseTX
+TXT
+
+cat > simulate/namespace/default/cisco-01/show_inventory.txt <<\"TXT\"
+NAME: \"WS-C2960X-48TS-L\", DESCR: \"Cisco Catalyst 2960-X 48 Port 10/100/1000\"
+PID: WS-C2960X-48TS-L, VID: V01, SN: FOC1234XYZ
+TXT
+
+cat > simulate/namespace/default/cisco-01/show_cdp_neighbors.txt <<\"TXT\"
+Device ID        Local Intrfce   Holdtime   Capability  Platform    Port ID
+Switch2          Gi1/0/2         131        S I         WS-C2960X   Gi1/0/1
+TXT
+
+cat > simulate/namespace/default/cisco-01/show_vlan_brief.txt <<\"TXT\"
+VLAN Name   Status   Ports
+1    default active  Gi1/0/1, Gi1/0/2
+10   Users   active  Gi1/0/3-10
+TXT
+
+cat > simulate/namespace/default/cisco-01/configure_terminal.txt <<\"TXT\"
+Enter configuration commands, one per line. End with CNTL/Z.
+TXT
+
+cat > simulate/namespace/default/cisco-01/end.txt <<\"TXT\"
+Exit configuration mode.
+TXT
+
+cat > simulate/namespace/default/cisco-01/write_memory.txt <<\"TXT\"
+Building configuration...
+[OK]
+TXT
+
+# Huawei commands
+cat > simulate/namespace/default/huawei-01/screen-length_disable.txt <<\"TXT\"
+Info: The screen length is 0, unlimited.
+TXT
+
+cat > simulate/namespace/default/huawei-01/display_version.txt <<\"TXT\"
+Huawei Versatile Routing Platform Software
+VRP (R) software, Version 8.180 (CE8V180)
+Copyright (C) 2012-2024 Huawei Technologies Co., Ltd.
+TXT
+
+cat > simulate/namespace/default/huawei-01/display_current-configuration.txt <<\"TXT\"
+sysname huawei-01
+#
+interface GE0/0/1
+ ip address 10.0.0.2 255.255.255.0
+#
+return
+TXT
+
+cat > simulate/namespace/default/huawei-01/display_interface_brief.txt <<\"TXT\"
+Interface                PHY     Protocol   IP Address      Description
+GE0/0/1                  up      up         10.0.0.2/24     Uplink
+GE0/0/2                  down    down       unassigned      --
+TXT
+
+cat > simulate/namespace/default/huawei-01/display_vlan.txt <<\"TXT\"
+VID  Name    Ports
+1    default GE0/0/1, GE0/0/2
+10   Users   GE0/0/3-4
+TXT
+
+cat > simulate/namespace/default/huawei-01/display_lldp_neighbor.txt <<\"TXT\"
+LLDP neighbor information:
+Chassis ID: 00-11-22-33-44-55
+Port ID   : GE0/0/2
+System Name: Switch2
+TXT
+
+cat > simulate/namespace/default/huawei-01/system-view.txt <<\"TXT\"
+Enter system view, return to user view with Ctrl+Z.
+TXT
+
+cat > simulate/namespace/default/huawei-01/quit.txt <<\"TXT\"
+Info: Configuration console has been closed.
+TXT
+
+cat > simulate/namespace/default/huawei-01/save.txt <<\"TXT\"
+The current configuration will be saved.
+Save? [Y/N]: Y
+Info: Save the configuration successfully.
+TXT

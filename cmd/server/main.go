@@ -15,6 +15,7 @@ import (
     "github.com/sshcollectorpro/sshcollectorpro/internal/database"
     "github.com/sshcollectorpro/sshcollectorpro/internal/service"
     "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+    "github.com/sshcollectorpro/sshcollectorpro/simulate"
 )
 
 func main() {
@@ -58,8 +59,6 @@ func main() {
 	}
 	defer database.Close()
 
-    // 已移除 Redis 依赖，直接运行
-
     // 创建采集器服务
     collectorService := service.NewCollectorService(cfg)
     ctx := context.Background()
@@ -88,6 +87,31 @@ func main() {
         logger.Fatal("Failed to start deploy service", "error", err)
     }
     defer deployService.Stop()
+
+    // 启动模拟服务（可选）
+    var simMgr *simulate.Manager
+    if cfg.Server.SimulateEnable {
+        simPath := "simulate/simulate.yaml"
+        if _, err := os.Stat(simPath); err != nil {
+            logger.Warn("Simulate: simulate.yaml missing, skip starting simulate servers", "path", simPath, "error", err)
+        } else {
+            sc, err := simulate.LoadConfig(simPath)
+            if err != nil {
+                logger.Warn("Simulate: failed to load simulate.yaml", "error", err)
+            } else {
+                mgr, err := simulate.Start(sc)
+                if err != nil {
+                    logger.Warn("Simulate: failed to start", "error", err)
+                } else {
+                    simMgr = mgr
+                    logger.Info("Simulate: started", "namespaces", len(sc.Namespace))
+                }
+            }
+        }
+    }
+    defer func() {
+        if simMgr != nil { simMgr.Stop() }
+    }()
 
     // 设置路由
     r := router.SetupRouter(collectorService, backupService, formatService, deployService)

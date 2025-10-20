@@ -1,0 +1,3 @@
+VID  Name    Ports
+1    default GE0/0/1, GE0/0/2
+10   Users   GE0/0/3-4

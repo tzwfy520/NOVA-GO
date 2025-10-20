@@ -1,0 +1,4 @@
+LLDP neighbor information:
+Chassis ID: 00-11-22-33-44-55
+Port ID   : GE0/0/2
+System Name: Switch2
