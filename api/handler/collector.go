@@ -251,7 +251,7 @@ type CustomerBatchRequest struct {
 // CustomerDevice 自定义采集设备参数
 type CustomerDevice struct {
 	DeviceIP        string   `json:"device_ip"`
-	Port            int      `json:"port,omitempty"`
+	Port            int      `json:"device_port,omitempty"`
 	DeviceName      string   `json:"device_name,omitempty"`
 	DevicePlatform  string   `json:"device_platform,omitempty"`
 	CollectProtocol string   `json:"collect_protocol,omitempty"`
@@ -274,7 +274,7 @@ type SystemBatchRequest struct {
 // SystemDevice 系统预制采集设备参数（cli_list 可选扩展）
 type SystemDevice struct {
 	DeviceIP        string   `json:"device_ip"`
-	Port            int      `json:"port,omitempty"`
+	Port            int      `json:"device_port,omitempty"`
 	DeviceName      string   `json:"device_name,omitempty"`
 	DevicePlatform  string   `json:"device_platform"`
 	CollectProtocol string   `json:"collect_protocol,omitempty"`

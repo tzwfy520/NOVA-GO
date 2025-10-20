@@ -15,7 +15,7 @@
       "device_name": "test-out-r1",
       "device_platform": "cisco_ios",
       "collect_protocol": "ssh",
-      "port": 21201,
+      "device_port": 21201,
       "user_name": "eccom123",
       "password": "Eccom@12345",
       "enable_password": "Eccom@12345"

@@ -1,480 +1,217 @@
 # SSH采集器专业版 (SSH Collector Pro)
 
-一个高性能、可扩展的SSH设备信息采集系统，支持分布式部署与实时监控。
+高性能、可扩展的 SSH 设备采集与模拟系统。支持批量并发、重试控制、结果格式化、设备模拟与平台适配，为网络与系统运维提供稳定、高效的采集能力。
 
-## 🚀 功能特性
+## 功能概览
+- 采集执行：批量任务、并发队列、重试与超时控制、任务取消
+- 连接池：可配置连接超时、会话上限、KeepAlive，复用稳定
+- API接口：统一 RESTful，含批量自定义采集、状态查询与格式化接口
+- 结果处理：原始输出与格式化视图并存，便于二次处理
+- 模拟器：可本地模拟设备，支持命令匹配（精确/模糊/前缀）与提示符
+- 日志与追踪：结构化日志、任务时长、错误追踪
+- 配置管理：YAML 配置，支持并发档位与平台默认值
 
-### 核心功能
-- **SSH连接管理**: 支持密码和密钥认证，连接池复用
-- **设备信息采集**: 自动采集系统信息、性能指标、配置文件等
-- **分布式架构**: 支持多节点部署，负载均衡
-- **任务执行**: 支持并发执行与取消，提供任务状态查询
- 
-- **数据存储**: SQLite本地存储
+## 架构与模块
+- 核心服务：`api/router`（HTTP 路由） + `api/handler`（业务入口）
+- 采集服务：`internal/service/collector.go`（批量采集与重试）
+- 交互层：`internal/service/interact_basic.go`（统一 SSH 交互与预命令过滤）
+- SSH连接池：`pkg/ssh`（连接与会话资源管理）
+- 模拟器：`simulate/Simulate.go`（命名空间/设备/命令文件）
+- 配置与模型：`internal/config`、`internal/model`
+- 文档：`docs/api/*.md`、`docs/simulate.md`
 
-### 技术特性
-- **高性能**: Go语言开发，并发处理能力强
-- **容器化**: Docker一键部署，支持Docker Compose
-- **RESTful API**: 完整的API接口，支持第三方集成
-- **配置管理**: YAML配置文件，支持环境变量覆盖
-- **日志系统**: 结构化日志，支持多种输出格式
-- **健康检查**: 内置健康检查接口
+## 快速开始
+1) 构建与运行（本地开发）
+- 构建：`go build -o dist/sshcollector ./cmd/server`
+- 启动：`./dist/sshcollector -config configs/dev.yaml`
+- 健康检查：`GET /health`（默认端口 `18000`）
 
-## 📋 系统要求
+2) 构建脚本
+- `./scripts/build.sh`（打包产物）
 
-### 最低要求
-- **操作系统**: Linux/macOS/Windows
-- **内存**: 512MB RAM
-- **存储**: 1GB可用空间
-- **网络**: 支持SSH连接的网络环境
+3) 目录约定
+- 配置：`configs/dev.yaml | prod.yaml`
+- 日志：`logs/`
+- 模拟：`simulate/`（含 `simulate.yaml` 与命令文件目录）
 
-### Docker部署要求
-- **Docker**: 20.10+
-- **Docker Compose**: 2.0+
-- **内存**: 2GB RAM (包含所有服务)
-- **存储**: 5GB可用空间
+## 配置要点
+- 并发档位（推荐）：在 `configs/*.yaml` 中为不同机器规格设置安全并发
+  - `collector.concurrency_profile: S|M|L|XL`
+  - 档位会覆盖 `collector.concurrent` 与 SSH `MaxSessions`
+- SSH 连接：`ssh.timeout`、`ssh.connect_timeout`、`ssh.keep_alive_interval`、`ssh.max_sessions`
+- 重试：`collector.retry_flags`（作为请求 `retry_flag` 的默认回退）
 
-## 🛠️ 快速开始
-
-> 📖 **详细部署指南**: 请参考 [部署文档](docs/DEPLOYMENT.md) 获取完整的部署说明、问题解决方案和最佳实践。
-
-### 方式一：Docker部署（推荐）
-
-1. **克隆项目**
-```bash
-git clone https://github.com/your-org/sshcollectorpro.git
-cd sshcollectorpro
+示例（并发档位）：
 ```
-
-2. **一键部署**
-```bash
-./deploy/deploy.sh
-```
-
-3. **访问服务**
-- SSH采集器API: http://localhost:18000
-
-### 方式二：直接部署（生产环境推荐）
-
-1. **本地编译**
-```bash
-# 编译Linux版本
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o sshcollector-linux ./cmd/server
-```
-
-2. **部署到服务器**
-```bash
-# 传输文件到服务器
-scp sshcollector-linux your-server:/opt/ssh-collector-pro/sshcollector
-
-# SSH连接到服务器
-ssh your-server
-
-# 启动服务
-cd /opt/ssh-collector-pro
-mkdir -p logs data temp
-chmod +x sshcollector
-nohup ./sshcollector > logs/app.log 2>&1 &
-```
-
-3. **验证部署**
-```bash
-# 检查服务状态
-curl -s http://localhost:8100/api/v1/health
-```
-
-### 方式三：源码编译
-
-1. **环境准备**
-```bash
-# 安装Go 1.21+
-go version
-
-# 安装依赖
-go mod download
-```
-
-2. **编译项目**
-```bash
-./scripts/build.sh
-```
-
-3. **运行服务**
-```bash
-./dist/sshcollector-linux-amd64 -config configs/config.yaml
-```
-
-## 📖 使用指南
-
-### 设备管理
-
-#### 添加设备
-```bash
-curl -X POST http://localhost:18000/api/devices \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Web服务器01",
-    "ip": "192.168.1.100",
-    "port": 22,
-    "username": "root",
-    "password": "your_password",
-    "device_type": "linux"
-  }'
-```
-
-#### 测试连接
-```bash
-curl -X POST http://localhost:18000/api/devices/1/test
-```
-
-### 任务执行
-
-#### 执行采集任务
-```bash
-curl -X POST http://localhost:18000/api/collector/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-    "device_ip": "192.168.1.100",
-    "port": 22,
-    "username": "root",
-    "password": "your_password",
-    "commands": ["uptime", "df -h", "free -m"]
-  }'
-```
-
-#### 查看任务状态
-```bash
-curl http://localhost:18000/api/collector/status/task_id_here
-```
-
-### 批量执行
-```bash
-curl -X POST http://localhost:18000/api/collector/batch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "requests": [
-      {
-        "device_ip": "192.168.1.100",
-        "commands": ["uptime"]
-      },
-      {
-        "device_ip": "192.168.1.101", 
-        "commands": ["df -h"]
-      }
-    ]
-  }'
-```
-
-## 🔧 配置说明
-
-### 主配置文件 (configs/config.yaml)
-
-```yaml
-# 服务器配置
-server:
-  host: "0.0.0.0"
-  port: 18000
-  read_timeout: 30
-  write_timeout: 30
-
-# 数据库配置
-database:
-  sqlite:
-    path: "data/sshcollector.db"
-    max_open_conns: 25
-    max_idle_conns: 5
-
-
-# SSH配置
-ssh:
-  timeout: 30
-  max_connections: 100
-
-# 采集器配置
 collector:
-  name: "sshcollector-01"
-  tags: ["production", "datacenter-1"]
-  heartbeat_interval: 30
-
-# 采集器配置
-collector:
-  id: "collector-001"
-  type: "ssh"
-  version: "1.0.0"
-  tags: ["production", "ssh"]
-  threads: 10
-  concurrent: 5
-
-# 日志配置
-log:
-  level: "info"
-  output: "file"
-  file_path: "logs/sshcollector.log"
-  max_size: 100
-  max_backups: 10
-  max_age: 30
-```
-
-### 环境变量覆盖
-
-```bash
-# 服务器配置
-export SERVER_HOST=0.0.0.0
-export SERVER_PORT=18000
-
-# 数据库配置
-export DATABASE_SQLITE_PATH=/app/data/sshcollector.db
-
-
-# 日志配置
-export LOG_LEVEL=info
-export LOG_OUTPUT=file
-```
-
-## 🐳 Docker部署详解
-
-### 服务架构
-
-```
-┌─────────────────┐
-│  SSH Collector  │
-│   (核心服务)     │
-│   Port: 18000   │
-└─────────────────┘
-```
-
-### 部署脚本命令
-
-```bash
-# 完整部署
-./deploy/deploy.sh deploy
-
-# 启动服务
-./deploy/deploy.sh start
-
-# 停止服务
-./deploy/deploy.sh stop
-
-# 重启服务
-./deploy/deploy.sh restart
-
-# 查看状态
-./deploy/deploy.sh status
-
-# 查看日志
-./deploy/deploy.sh logs [service_name]
-
-# 清理环境
-./deploy/deploy.sh clean
-```
-
-### 数据持久化
-
-本地目录映射：
-- `./data`: 应用数据目录
-- `./logs`: 应用日志目录
-- `./configs`: 配置文件目录
-
- 
-
-## 🔍 故障排查
-
-### 常见问题
-
-1. **服务启动失败**
-```bash
-# 查看服务日志
-./deploy/deploy.sh logs sshcollector
-
-# 检查配置文件
-cat configs/config.yaml
-```
-
-2. **SSH连接失败**
-```bash
-# 测试网络连通性
-telnet target_host 22
-
-# 检查认证信息
-ssh username@target_host
-```
-
-3. **数据库连接问题**
-```bash
-# 检查SQLite文件权限
-ls -la data/sshcollector.db
-
-```
-
-### 日志分析
-
-```bash
-# 查看应用日志
-tail -f logs/sshcollector.log
-
-# 查看Docker容器日志
-docker logs sshcollector
-
-# 查看系统资源使用
-docker stats
-```
-
-## 🚀 性能优化
-
-### 连接池配置
-```yaml
-ssh:
-  max_connections: 100    # 最大连接数
-  timeout: 30            # 连接超时时间
-  keep_alive: 300        # 连接保持时间
-```
-
-### 数据库优化
-```yaml
-database:
-  sqlite:
-    max_open_conns: 25   # 最大打开连接数
-    max_idle_conns: 5    # 最大空闲连接数
-    conn_max_lifetime: 300 # 连接最大生命周期
-```
-
-### 并发档位（推荐）
-在 `configs/config.yaml` 中定义并发档位，按宿主机规格选择安全并发。档位优先于数值并发。
-
-```yaml
-collector:
-  concurrency_profile: "S"   # 可选 S/M/L/XL（支持 "Concurrency-S" 等写法）
+  concurrency_profile: "S"
   concurrency_profiles:
-    S:   { concurrent: 8,  threads: 32 }   # 2c4g
-    M:   { concurrent: 16, threads: 64 }   # 4c8g
-    L:   { concurrent: 32, threads: 128 }  # 8c16g
-    XL:  { concurrent: 64, threads: 256 }  # 16c32g
-  concurrent: 5              # 若未配置档位则使用此数值
+    S: { concurrent: 8,  threads: 32 }
+    M: { concurrent: 16, threads: 64 }
+  concurrent: 5
 ```
 
-说明：
-- 档位应用后会覆盖 `collector.concurrent`，作用于批处理并发与 SSH 连接池。
-- 同时应用 `threads`，覆盖 SSH 会话上限（max_sessions）。
-- 启动日志会打印当前档位、并发与线程数，便于运维核验。
+## API 细节
+- 基本约定：
+  - 所有数据接口使用 `application/json`；跨域默认允许，支持 `OPTIONS` 预检
+  - 建议在请求头添加 `X-Request-ID`（可选），用于端到端追踪；服务会在响应头回写同名字段
+  - 统一响应封装：`{ "code": "SUCCESS|PARTIAL_SUCCESS|...", "message": "...", "data": [...], "total": N }`
 
- 
+- 路由与方法（`/api/v1`）：
+  - 系统与健康：
+    - `GET /health`（健康检查，服务未运行返回 `503` 与 `SERVICE_UNAVAILABLE`）
+    - `GET /collector/stats`（采集器统计，含 `running`、`active_tasks`、`max_workers`、`busy_workers`、`ssh_pool`）
+  - 采集（批量）：
+    - `POST /collector/batch`（通用批量；旧版保留）
+    - `POST /collector/batch/custom`（自定义批量；按 `devices[].cli_list` 执行）
+    - `POST /collector/batch/system`（系统批量；按 `device_list[].cli_list` 执行）
+    - `GET /collector/task/:task_id/status`（任务状态：`task_id`、`status`、`start_time`、`duration`；任务不存在返回 `404 TASK_NOT_FOUND`）
+    - `POST /collector/task/:task_id/cancel`（取消任务，若任务不存在返回 `404`）
+  - 格式化：
+    - `POST /formatted/batch`（批量格式化；与采集结果结合）
+    - `POST /formatted/fast`（快速格式化；参见 `docs/api/formatted_fast.md`）
+  - 备份：
+    - `POST /backup/batch`（批量备份）
+  - 部署：
+    - `POST /deploy/fast`（快速部署与状态检查）
+  - 设备管理：
+    - `POST /devices`、`GET /devices`、`GET /devices/:id`、`PUT /devices/:id`、`DELETE /devices/:id`、`POST /devices/:id/test`
 
-## 🔐 安全配置
+- 请求体字段（采集核心）：
+  - 顶层：`task_id`（必填）、`task_name`、`retry_flag`（重试次数，≥0）、`task_timeout`（秒）
+  - 设备（custom/batch → `devices[]`；system/batch → `device_list[]`）：
+    - `device_ip`（必填）、`device_port`（默认 `22`）、`device_name`、`device_platform`（system 必填）、`collect_protocol`（默认 `ssh`）
+    - `user_name`（必填）、`password`（必填）、`enable_password`（选填）
+    - `cli_list`（命令数组，按顺序执行）、`device_timeout`（秒）
 
-### SSH密钥认证
-```yaml
-ssh:
-  auth_method: "key"     # 认证方式：password/key
-  private_key_path: "/path/to/private/key"
-  passphrase: "key_passphrase"
+- 响应体（每台设备）：
+  - `device_ip`、`port`、`device_name`、`device_platform`、`task_id`
+  - `success`（布尔）、`error`（字符串）、`duration_ms`（整型）、`timestamp`
+  - `results`：数组，元素为 `{ command, raw_output, format_output, error, exit_code, duration_ms }`
+  - 批量接口顶层 `code`：
+    - `SUCCESS`：全部设备成功
+    - `PARTIAL_SUCCESS`：部分或全部失败（包含 `success=false` 的设备项）
+
+- 并发与队列说明：
+  - 批内并发度由服务端 `max_workers` 限制，实际并发为 `min(max_workers, 设备数)`；可在 `GET /collector/stats` 中查看
+  - 队列等待超时由有效 `task_timeout` 推导（默认 30s）；超过后返回队列超时错误
+
+- 错误码与状态：
+  - `INVALID_PARAMS`（400）：JSON解析失败或必填字段缺失
+  - `MISSING_TASK_ID`（400）：任务ID为空
+  - `EMPTY_DEVICES`/`TOO_MANY_DEVICES`（400）：设备列表为空或超过上限（200）
+  - `TASK_NOT_FOUND`（404）：任务不存在（状态查询/取消）
+  - `SERVICE_UNAVAILABLE`（503）：服务未运行（健康检查）
+  - 采集阶段错误（如握手/认证失败）以设备级 `error` 字段呈现；批量接口总体仍为 `200`，通过 `code=PARTIAL_SUCCESS` 表示部分/全部失败
+
+- 示例：状态查询
+```
+curl -sS 'http://localhost:18000/api/v1/collector/task/T-quick-001-1/status'
+# 响应示例
+{
+  "task_id": "T-quick-001-1",
+  "status": "running|success|failed|cancelled",
+  "start_time": "2025-10-20T06:20:00Z",
+  "duration": "2.345678s"
+}
 ```
 
-### API访问控制
-```yaml
-server:
-  enable_auth: true      # 启用API认证
-  api_key: "your_api_key"
-  rate_limit: 1000       # 请求频率限制
+- 示例：统计信息
+```
+curl -sS 'http://localhost:18000/api/v1/collector/stats'
+# 响应示例（简化）
+{
+  "code": "SUCCESS",
+  "message": "获取统计信息成功",
+  "data": {
+    "running": true,
+    "active_tasks": 1,
+    "max_workers": 4,
+    "busy_workers": 1,
+    "ssh_pool": { "active": 0, "idle": 0 }
+  }
+}
 ```
 
-### 数据加密
-```yaml
-security:
-  encrypt_passwords: true # 加密存储密码
-  encryption_key: "32_char_encryption_key_here"
+更多细节与完整示例请参见 `docs/api/collector.md` 与 `docs/api/formatted_fast.md`。
+
+## 采集 API
+- 批量自定义采集：`POST /api/v1/collector/batch/custom`
+- 请求字段（关键）：
+  - `device_ip`、`device_port`、`user_name`、`password`
+  - `cli_list`（命令数组）
+  - `retry_flag`（可选，优先于平台默认与全局回退）
+  - `task_timeout`、`device_timeout`（可选）
+
+示例（针对本地模拟 `huawei-01`）
+```
+curl -sS -X POST 'http://localhost:18000/api/v1/collector/batch/custom' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "task_id": "T-quick-001",
+    "retry_flag": 0,
+    "timeout": 30,
+    "devices": [ {
+      "device_ip": "127.0.0.1",
+      "device_port": 22001,
+      "device_name": "huawei-01",
+      "device_platform": "huawei",
+      "collect_protocol": "ssh",
+      "user_name": "huawei-01",
+      "password": "nova",
+      "cli_list": [ "dis ver", "display interface brief" ]
+    } ]
+  }'
 ```
 
-## 📚 API文档
+返回包含每台设备的 `success`、`duration_ms`、`results`（命令与输出）与错误信息。
 
-### 设备管理API
+## 模拟器说明（simulate）
+- 配置文件：`simulate/simulate.yaml`
+  - 命名空间示例：`namespace.default.port: 22001`、`max_conn: 5`
+  - 设备类型：`device_type.huawei`（提示符等）
+  - 设备名映射：`device_name.huawei-01.device_type: huawei`
+- 登录约定：
+  - 用户名为设备名（如 `huawei-01`），密码固定为 `nova`
+- 命令匹配：
+  - 精确匹配：`display version` → `display_version.txt`
+  - 归一化匹配：空格→下划线
+  - 模糊匹配：大小写不敏感、包含匹配（空格/下划线宽松）
+  - 前缀匹配：按词顺序前缀（如 `dis ver` → `display version`、`dis int bri` → `display interface brief`）
+  - 多匹配提示：`display` → 返回候选列表
+- 命令文件目录：`simulate/namespace/<ns>/<device>/`
+  - 例如：`display_version.txt`、`display_interface_brief.txt`
+  - 可选：`supported_commands.txt`（优先用于候选集合）
+- 并发上限：`max_conn` 控制每命名空间的同时连接数，超过将拒绝握手
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| POST | /api/devices | 创建设备 |
-| GET | /api/devices | 获取设备列表 |
-| GET | /api/devices/{id} | 获取设备详情 |
-| PUT | /api/devices/{id} | 更新设备 |
-| DELETE | /api/devices/{id} | 删除设备 |
-| POST | /api/devices/{id}/test | 测试设备连接 |
+## 并发与重试实践
+- 并发上限（模拟器）：`simulate.yaml` 中 `max_conn`（默认 `5`）
+  - 若需同时 10 请求，建议将其提高到 `10` 以上并重启模拟服务
+- 请求重试：接口中设置 `retry_flag: 2|3`，可降低瞬时握手失败带来的误差
+- 节流与抖动：并发尖峰时建议在发起端引入 50–100ms 的微抖动
 
-### 采集器API
+## 日志与排障
+- 任务日志：记录任务时长、重试次数与错误信息
+- 常见错误：`ssh: handshake failed`（并发上限/瞬时拥塞）、认证失败（密码或用户名不匹配）
+- 观察点：`duration_ms` 分布、失败样例聚类
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| POST | /api/collector/execute | 执行采集任务 |
-| POST | /api/collector/batch | 批量执行任务 |
-| GET | /api/collector/status/{taskId} | 获取任务状态 |
-| DELETE | /api/collector/cancel/{taskId} | 取消任务 |
-| GET | /api/collector/stats | 获取统计信息 |
+## 开发与测试
+- 单元测试：`go test -v ./...`
+- Lint：`golangci-lint run`
+- 示例程序：`cmd/cli/test_batch_custom.go`（批量采集示例）
 
-### 系统API
+## 贡献指南
+- 提交类型：`feat`/`fix`/`docs`/`refactor`/`test`/`chore`/`style`
+- 适配请求：请在 Issue 中提供设备型号、平台版本与若干典型命令输出样本，便于快速集成与验证
 
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| GET | /health | 健康检查 |
- 
-| GET | /api/stats | 系统统计 |
+## 许可证
+- 本项目采用 MIT License
 
-## 🤝 贡献指南
+## 未来计划
+- 增加设备适配类型（可提出适配请求，需要提出方配合）
+- 增加内置解析能力
+- API/SNMP 协议对接能力
 
-### 开发环境搭建
-
-1. **Fork项目**
-2. **克隆代码**
-```bash
-git clone https://github.com/your-username/sshcollectorpro.git
-cd sshcollectorpro
-```
-
-3. **安装依赖**
-```bash
-go mod download
-```
-
-4. **运行测试**
-```bash
-go test -v ./...
-```
-
-5. **代码检查**
-```bash
-golangci-lint run
-```
-
-### 提交规范
-
-- feat: 新功能
-- fix: 修复bug
-- docs: 文档更新
-- style: 代码格式调整
-- refactor: 代码重构
-- test: 测试相关
-- chore: 构建过程或辅助工具的变动
-
-## 📄 许可证
-
-本项目采用 [MIT License](LICENSE) 许可证。
-
-## 📞 支持与反馈
-
-- **Issues**: [GitHub Issues](https://github.com/your-org/sshcollectorpro/issues)
-- **讨论**: [GitHub Discussions](https://github.com/your-org/sshcollectorpro/discussions)
-- **邮箱**: support@sshcollectorpro.com
-
-## 🎯 路线图
-
-### v1.1.0 (计划中)
-- [ ] Web管理界面
-- [ ] 更多设备类型支持
-- [ ] 插件系统
-- [ ] 集群模式
-
-### v1.2.0 (计划中)
-- [ ] 机器学习异常检测
-- [ ] 自动化运维脚本
-- [ ] 移动端应用
-- [ ] 多租户支持
-
----
-
-**SSH采集器专业版** - 让设备管理更简单、更高效！ 🚀
+## 路线图
+- v1.1.0（计划）：Web 管理界面、更多设备类型支持、插件系统、集群模式
+- v1.2.0（计划）：异常检测、自动化运维脚本、移动端应用、多租户支持

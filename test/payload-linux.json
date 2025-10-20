@@ -1,6 +1,6 @@
 {
-  "task_id": "T-2001",
-  "task_name": "custom-batch-check",
+  "task_id": "T-2001-1",
+  "task_name": "custom-batch-linux",
   "retry_flag": 0,
   "timeout": 15,
   "cli_list": [
@@ -10,7 +10,7 @@
   "devices": [
     {
       "device_ip": "115.190.80.219",
-      "port": 22,
+      "device_port": 22,
       "device_name": "huoshan-1",
       "device_platform": "linux",
       "collect_protocol": "ssh",

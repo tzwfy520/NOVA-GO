@@ -9,7 +9,7 @@
 - `device_name`：设备名称，选填。
 - `device_platform`：设备平台，选填；系统批量接口中为必填。
 - `collect_protocol`：采集协议，当前支持 `ssh`，选填；为空时默认按 SSH 处理。
-- `port`：SSH 端口，选填；未提供或非法时默认 `22`。
+- `device_port`：SSH 端口，选填；未提供或非法时默认 `22`。
 - `user_name`：登录用户名，必填。
 - `password`：登录密码，必填。
 - `enable_password`：特权/enable 密码，选填。
@@ -77,7 +77,7 @@
 - 错误提示识别：可通过配置 `collector.interact.error_hints` 扩展错误前缀，默认大小写不敏感并自动去空格。示例：`invalid input`、`unrecognized command`。
 - Cisco特权失败：若结果包含 `privileged mode not entered (#)`，需在请求中提供 `enable_password` 或确保用户具备特权；系统会尝试执行 `enable` 并取消分页。
 - 提示符识别异常：检查设备平台与提示符后缀。平台默认后缀示例：Cisco `#`/`>`，Huawei/H3C `]`。如需自定义请在代码中调整 `getPlatformDefaults`。
-- 连接失败：检查 `device_ip` 与 `port`、认证参数、以及 `ssh.timeout` 设置；可直接使用系统命令进行手动SSH测试验证。
+- 连接失败：检查 `device_ip` 与 `device_port`、认证参数、以及 `ssh.timeout` 设置；可直接使用系统命令进行手动SSH测试验证。
 - 输出过滤：默认移除分页提示（`collector.output_filter`），如需保留原始提示请调整配置。
 
 ---
@@ -90,7 +90,7 @@
 - 路径：`POST /api/v1/collector/batch/custom`
 - 输入参数：
   - 统一参数：`task_id`、`task_name`、`retry_flag`、`timeout`
-  - 设备参数（按设备数量组织为数组 `devices`）：`device_ip`、`device_name`、`device_platform`、`collect_protocol`、`user_name`、`password`、`port`、`cli_list`
+  - 设备参数（按设备数量组织为数组 `devices`）：`device_ip`、`device_name`、`device_platform`、`collect_protocol`、`user_name`、`password`、`device_port`、`cli_list`
  - 输出参数：按设备组织输出，每个设备包含设备标识与该设备对应的采集执行结果；新增 `port` 字段标识设备登陆端口。
 
 示例请求（custom/batch）：
@@ -109,7 +109,7 @@
       "user_name": "ops",
       "password": "xxxx",
       "enable_password": "xxxx",
-      "port": 22,
+      "device_port": 22,
       "cli_list": ["show version", "show running-config"]
     },
     {
@@ -119,7 +119,7 @@
       "collect_protocol": "ssh",
       "user_name": "ops",
       "password": "yyyy",
-      "port": 2222,
+      "device_port": 2222,
       "cli_list": ["display version", "display current-configuration"]
     }
   ]

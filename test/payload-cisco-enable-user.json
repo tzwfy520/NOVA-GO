@@ -12,7 +12,7 @@
   "devices": [
     {
       "device_ip": "139.196.196.96",
-      "port": 21201,
+      "device_port": 21201,
       "device_name": "test-out-r1",
       "device_platform": "cisco_ios",
       "collect_protocol": "ssh",

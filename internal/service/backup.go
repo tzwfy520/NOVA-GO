@@ -40,7 +40,7 @@ type BackupBatchRequest struct {
 // BackupDevice 备份的设备信息与命令
 type BackupDevice struct {
 	DeviceIP        string   `json:"device_ip"`
-	Port            int      `json:"port,omitempty"`
+	Port            int      `json:"device_port,omitempty"`
 	DeviceName      string   `json:"device_name,omitempty"`
 	DevicePlatform  string   `json:"device_platform,omitempty"`
 	CollectProtocol string   `json:"collect_protocol,omitempty"` // ssh

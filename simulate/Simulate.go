@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"regexp"
 
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/ssh"
@@ -136,6 +137,66 @@ func Start(simCfg *Config) (*Manager, error) {
 	return m, nil
 }
 
+// Reload 热更新模拟配置：按命名空间增删改并重载端口
+func (m *Manager) Reload(newCfg *Config) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if newCfg == nil {
+		return fmt.Errorf("nil simulate config")
+	}
+
+	// 确保新目录结构存在
+	if err := EnsureDirs(newCfg); err != nil {
+		logger.Warn("Simulate: ensure dirs on reload failed", "error", err)
+	}
+
+	// 1) 停止并移除在新配置中不存在的命名空间
+	for ns, srv := range m.nsServers {
+		if _, ok := newCfg.Namespace[ns]; !ok {
+			srv.stop()
+			delete(m.nsServers, ns)
+			logger.Info("Simulate: namespace removed", "namespace", ns)
+		}
+	}
+
+	// 2) 新增或更新现有命名空间（端口变化则重启）
+	for ns, nsCfg := range newCfg.Namespace {
+		if srv, ok := m.nsServers[ns]; ok {
+			portChanged := srv.cfg.Port != nsCfg.Port
+			// 更新运行时配置
+			srv.cfg = nsCfg
+			srv.simCfg = newCfg
+			if portChanged {
+				srv.stop()
+				if err := srv.start(); err != nil {
+					logger.Warn("Simulate: namespace restart failed", "namespace", ns, "port", nsCfg.Port, "error", err)
+				} else {
+					logger.Info("Simulate: namespace restarted", "namespace", ns, "port", nsCfg.Port)
+				}
+			} else {
+				logger.Info("Simulate: namespace updated", "namespace", ns, "port", nsCfg.Port)
+			}
+			continue
+		}
+		// 新增命名空间
+		srv, err := newNamespaceServer(ns, nsCfg, newCfg)
+		if err != nil {
+			logger.Warn("Simulate: init new namespace failed", "namespace", ns, "error", err)
+			continue
+		}
+		if err := srv.start(); err != nil {
+			logger.Warn("Simulate: start new namespace failed", "namespace", ns, "port", nsCfg.Port, "error", err)
+			continue
+		}
+		m.nsServers[ns] = srv
+		logger.Info("Simulate: namespace added", "namespace", ns, "port", nsCfg.Port)
+	}
+
+	m.cfg = newCfg
+	return nil
+}
+
 // Stop 停止所有模拟服务
 func (m *Manager) Stop() {
 	m.mu.Lock()
@@ -163,14 +224,6 @@ func newNamespaceServer(nsName string, nsCfg NamespaceConfig, simCfg *Config) (*
 		simCfg:  simCfg,
 		hostKey: signer,
 	}, nil
-}
-
-// 因为标准库没有直接暴露 x509 marshal，这里手动 marshal 成 PEM 然后解析出 DER
-// 但 ssh.ParsePrivateKey 接受的是 PEM 或 DER；我们直接返回 PEM 编码的字节即可
-func x509MarshalPKCS1PrivateKey(key *rsa.PrivateKey) []byte {
-	privDER := x509.MarshalPKCS1PrivateKey(key)
-	blk := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: privDER}
-	return pem.EncodeToMemory(blk)
 }
 
 // 新增：按 namespace 加载或生成持久化的 host key（RSA 2048）
@@ -215,17 +268,18 @@ func loadOrCreateHostKey(_ string) (ssh.Signer, error) {
 	// 不存在或迁移失败则生成新密钥并持久化
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate host key: %w", err)
+		return nil, fmt.Errorf("failed to generate rsa key: %w", err)
 	}
-	pemBytes := x509MarshalPKCS1PrivateKey(key)
-	if writeErr := os.WriteFile(keyPath, pemBytes, 0o600); writeErr != nil {
-		return nil, fmt.Errorf("failed to write host key: %w", writeErr)
+	bs := x509.MarshalPKCS1PrivateKey(key)
+	pemBlock := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: bs}
+	if werr := os.WriteFile(keyPath, pem.EncodeToMemory(pemBlock), 0o600); werr != nil {
+		return nil, fmt.Errorf("failed to persist rsa key: %w", err)
 	}
-	signer, err := ssh.ParsePrivateKey(pemBytes)
+	signer, err := ssh.ParsePrivateKey(pem.EncodeToMemory(pemBlock))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse generated host key: %w", err)
+		return nil, fmt.Errorf("failed to parse persisted rsa key: %w", err)
 	}
-	logger.Info("Simulate: global host key generated", "file", keyPath)
+	logger.Info("Simulate: new host key generated", "file", keyPath)
 	return signer, nil
 }
 
@@ -528,8 +582,148 @@ func (s *namespaceServer) loadCommandOutput(ns, deviceName, cmd string) string {
 		logger.Debug("Simulate: load out (normalized)", "device", deviceName, "cmd", cmd, "file", p2)
 		return ensureCRLF(string(bs))
 	}
-	logger.Debug("Simulate: load out (miss)", "device", deviceName, "cmd", cmd)
-	return ""
+	// 未直接命中：进入模糊匹配
+	cands, fileMap := s.listSupportedCommands(base)
+	if len(cands) == 0 {
+		logger.Debug("Simulate: no supported commands listed", "device", deviceName)
+		return "unsupportted command\r\n"
+	}
+	matches := fuzzyMatchCommands(cmd, cands)
+	// 追加：按词前缀的正则匹配并与原结果合并
+	prefixMatches := prefixWordMatchCommands(cmd, cands)
+	logger.Debug("Simulate: match summary", "cmd", cmd, "fuzzy_count", len(matches), "prefix_count", len(prefixMatches))
+	if len(matches) == 0 && len(prefixMatches) > 0 {
+		matches = prefixMatches
+	} else if len(prefixMatches) > 0 {
+		uniq := make(map[string]struct{}, len(matches)+len(prefixMatches))
+		merged := make([]string, 0, len(matches)+len(prefixMatches))
+		for _, m := range matches { if _, ok := uniq[m]; !ok { uniq[m] = struct{}{}; merged = append(merged, m) } }
+		for _, m := range prefixMatches { if _, ok := uniq[m]; !ok { uniq[m] = struct{}{}; merged = append(merged, m) } }
+		matches = merged
+	}
+	if len(matches) == 0 {
+		return "unsupportted command\r\n"
+	}
+	if len(matches) == 1 {
+		// 单一匹配：读取对应文件
+		chosen := matches[0]
+		if fp, ok := fileMap[chosen]; ok {
+			if bs, err := os.ReadFile(fp); err == nil {
+				logger.Debug("Simulate: load out (fuzzy)", "device", deviceName, "cmd", cmd, "file", fp)
+				return ensureCRLF(string(bs))
+			}
+		}
+		// 回退：按候选名尝试 direct/normalized
+		p3 := filepath.Join(base, fmt.Sprintf("%s.txt", chosen))
+		if bs, err := os.ReadFile(p3); err == nil {
+			return ensureCRLF(string(bs))
+		}
+		p4 := filepath.Join(base, fmt.Sprintf("%s.txt", strings.ReplaceAll(chosen, " ", "_")))
+		if bs, err := os.ReadFile(p4); err == nil {
+			return ensureCRLF(string(bs))
+		}
+		return "unsupportted command\r\n"
+	}
+	// 多个匹配：输出建议列表
+	var b strings.Builder
+	b.WriteString("which command do you mean:\r\n")
+	for _, m := range matches {
+		b.WriteString("-- ")
+		b.WriteString(m)
+		b.WriteString("\r\n")
+	}
+	return b.String()
+}
+
+// 列出支持命令集合：优先 supported_commands.txt，回退为扫描 *.txt 文件
+func (s *namespaceServer) listSupportedCommands(base string) ([]string, map[string]string) {
+	cands := make([]string, 0, 64)
+	fileMap := make(map[string]string, 64)
+	// 扫描目录中的 .txt 文件
+	if entries, err := os.ReadDir(base); err == nil {
+		for _, e := range entries {
+			if e.IsDir() { continue }
+			name := e.Name()
+			if !strings.HasSuffix(strings.ToLower(name), ".txt") { continue }
+			if strings.EqualFold(name, "supported_commands.txt") { continue }
+			stem := strings.TrimSuffix(name, ".txt")
+			canon := strings.ReplaceAll(stem, "_", " ")
+			fileMap[canon] = filepath.Join(base, name)
+			cands = append(cands, canon)
+		}
+	}
+	// 若存在 supported_commands.txt，合并其中条目（可列出但文件可选存在）
+	listPath := filepath.Join(base, "supported_commands.txt")
+	if bs, err := os.ReadFile(listPath); err == nil {
+		for _, ln := range strings.Split(string(bs), "\n") {
+			ln = strings.TrimSpace(strings.TrimRight(strings.ReplaceAll(ln, "\r", ""), "\n"))
+			if ln == "" || strings.HasPrefix(ln, "#") { continue }
+			// 若已存在于扫描结果则跳过；否则添加候选并尝试推导文件名映射
+			exists := false
+			for _, c := range cands { if strings.EqualFold(c, ln) { exists = true; break } }
+			if !exists {
+				cands = append(cands, ln)
+				// 推导规范文件路径（可能不存在，加载时再兜底）
+				norm := strings.ReplaceAll(ln, " ", "_")
+				fp := filepath.Join(base, fmt.Sprintf("%s.txt", norm))
+				if _, err := os.Stat(fp); err == nil { fileMap[ln] = fp }
+			}
+		}
+	}
+	return cands, fileMap
+}
+
+// 正则模糊匹配（大小写不敏感；空格/下划线视为任意空白；允许包含匹配）
+func fuzzyMatchCommands(input string, cands []string) []string {
+	in := strings.TrimSpace(input)
+	if in == "" { return nil }
+	// 构造正则：转义元字符，空格/下划线替换为 \s+
+	esc := regexp.QuoteMeta(in)
+	esc = strings.ReplaceAll(esc, "_", "\\s+")
+	esc = strings.ReplaceAll(esc, " ", "\\s+")
+	pattern := "(?i).*" + esc + ".*"
+	re, err := regexp.Compile(pattern)
+	res := make([]string, 0, len(cands))
+	if err == nil {
+		for _, c := range cands {
+			if re.MatchString(c) {
+				res = append(res, c)
+			}
+		}
+		return res
+	}
+	// 回退：大小写不敏感的包含匹配
+	low := strings.ToLower(in)
+	for _, c := range cands {
+		if strings.Contains(strings.ToLower(c), low) {
+			res = append(res, c)
+		}
+	}
+	return res
+}
+
+// 新增：按词前缀的正则匹配（大小写不敏感；从命令首词开始顺序匹配）
+func prefixWordMatchCommands(input string, cands []string) []string {
+	in := strings.TrimSpace(strings.ReplaceAll(input, "_", " "))
+	if in == "" { return nil }
+	parts := strings.Fields(strings.ToLower(in))
+	res := make([]string, 0, len(cands))
+	for _, c := range cands {
+		cparts := strings.Fields(strings.ToLower(strings.ReplaceAll(c, "_", " ")))
+		if len(parts) > len(cparts) { continue }
+		ok := true
+		for i := range parts {
+			esc := regexp.QuoteMeta(parts[i])
+			pat := "(?i)^" + esc + ".*"
+			re, err := regexp.Compile(pat)
+			if err != nil || !re.MatchString(cparts[i]) {
+				ok = false
+				break
+			}
+		}
+		if ok { res = append(res, c) }
+	}
+	return res
 }
 
 // extractCommandFromPayload 尝试从 exec payload 中提取命令字符串
@@ -545,11 +739,12 @@ func extractCommandFromPayload(payload string) string {
 }
 
 func ensureCRLF(s string) string {
-	// 将 \n 规范为 \r\n，并保证结尾有一行结束符，避免客户端在首条短输出后因未读到有效“内容行”而跳过提示符导致卡住
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\n", "\r\n")
+	// 保证每个输出片段以 CRLF 结尾，避免客户端读行跳过
 	if !strings.HasSuffix(s, "\r\n") {
-		s += "\r\n"
+		if strings.HasSuffix(s, "\n") && !strings.HasSuffix(s, "\r\n") {
+			return strings.ReplaceAll(s, "\n", "\r\n")
+		}
+		return s + "\r\n"
 	}
 	return s
 }

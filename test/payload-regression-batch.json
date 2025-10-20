@@ -6,7 +6,7 @@
   "devices": [
     {
       "device_ip": "139.196.196.96",
-      "port": 21202,
+      "device_port": 21202,
       "device_name": "test-out-r1",
       "device_platform": "h3c_sr",
       "collect_protocol": "ssh",
@@ -19,7 +19,7 @@
     },
     {
       "device_ip": "139.196.196.96",
-      "port": 21201,
+      "device_port": 21201,
       "device_name": "test-out-sw1",
       "device_platform": "cisco_ios",
       "collect_protocol": "ssh",
@@ -32,7 +32,7 @@
     },
     {
       "device_ip": "10.200.40.202",
-      "port": 22,
+      "device_port": 22,
       "device_name": "test-out-r1",
       "device_platform": "h3c_sr",
       "collect_protocol": "ssh",

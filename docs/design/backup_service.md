@@ -67,7 +67,7 @@ backup:
   "devices": [
     {
       "device_ip": "10.0.0.2",
-      "port": 22,
+      "device_port": 22,
       "device_name": "ios-edge-1",
       "device_platform": "cisco_ios",
       "collect_protocol": "ssh",

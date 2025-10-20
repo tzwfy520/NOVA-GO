@@ -20,7 +20,7 @@ import (
 // Request/Device structures for custom batch
 type CustomerDevice struct {
 	DeviceIP        string   `json:"device_ip"`
-	Port            int      `json:"port,omitempty"`
+	Port            int      `json:"device_port,omitempty"`
 	DeviceName      string   `json:"device_name,omitempty"`
 	DevicePlatform  string   `json:"device_platform,omitempty"`
 	CollectProtocol string   `json:"collect_protocol,omitempty"`
@@ -41,7 +41,7 @@ type CustomerBatchRequest struct {
 // System batch endpoint payloads (per-device CLI list)
 type SystemDevice struct {
 	DeviceIP        string   `json:"device_ip"`
-	Port            int      `json:"port,omitempty"`
+	Port            int      `json:"device_port,omitempty"`
 	DeviceName      string   `json:"device_name,omitempty"`
 	DevicePlatform  string   `json:"device_platform"`
 	CollectProtocol string   `json:"collect_protocol,omitempty"`

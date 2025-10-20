@@ -42,7 +42,7 @@ type CollectRequest struct {
 	DeviceName      string                 `json:"device_name,omitempty"`
 	DevicePlatform  string                 `json:"device_platform,omitempty"`
 	CollectProtocol string                 `json:"collect_protocol,omitempty"` // ssh
-	Port            int                    `json:"port,omitempty"`
+    Port            int                    `json:"device_port,omitempty"`
 	UserName        string                 `json:"user_name"`
 	Password        string                 `json:"password"`
 	EnablePassword  string                 `json:"enable_password,omitempty"`

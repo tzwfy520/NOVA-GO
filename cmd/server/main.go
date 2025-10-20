@@ -10,6 +10,8 @@ import (
     "syscall"
     "time"
 
+    "github.com/fsnotify/fsnotify"
+
     "github.com/sshcollectorpro/sshcollectorpro/api/router"
     "github.com/sshcollectorpro/sshcollectorpro/internal/config"
     "github.com/sshcollectorpro/sshcollectorpro/internal/database"
@@ -136,6 +138,137 @@ func main() {
 		logger.Info("Server starting", "port", cfg.Server.Port, "mode", cfg.Server.Mode)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("Failed to start server", "error", err)
+		}
+	}()
+
+	// 配置文件监听与热更新
+	go func() {
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			logger.Warn("Config watch init failed", "error", err)
+			return
+		}
+		defer watcher.Close()
+		path := "configs/config.yaml"
+		if err := watcher.Add(path); err != nil {
+			logger.Warn("Config watch add failed", "error", err)
+			return
+		}
+		var debounce *time.Timer
+		debounceInterval := 300 * time.Millisecond
+		trigger := func() {
+			newCfg, err := config.Load(path)
+			if err != nil {
+				logger.Warn("Config reload failed", "error", err)
+				return
+			}
+			// 原地覆盖，保持指针不变
+			*cfg = *newCfg
+			// 刷新日志配置
+			_ = logger.Init(logger.Config{
+				Level:      cfg.Log.Level,
+				Format:     cfg.Log.Format,
+				Output:     cfg.Log.Output,
+				FilePath:   cfg.Log.FilePath,
+				MaxSize:    cfg.Log.MaxSize,
+				MaxBackups: cfg.Log.MaxBackups,
+				MaxAge:     cfg.Log.MaxAge,
+				Compress:   cfg.Log.Compress,
+			})
+			logger.Info("Config reloaded")
+			// 模拟开关变化时动态启停
+			if cfg.Server.SimulateEnable && simMgr == nil {
+				simPath := "simulate/simulate.yaml"
+				sc, err := simulate.LoadConfig(simPath)
+				if err != nil {
+					logger.Warn("Simulate: failed to load simulate.yaml on config reload", "error", err)
+				} else {
+					mgr, err := simulate.Start(sc)
+					if err != nil {
+						logger.Warn("Simulate: failed to start on config reload", "error", err)
+					} else {
+						simMgr = mgr
+						logger.Info("Simulate: started by config reload")
+					}
+				}
+			} else if !cfg.Server.SimulateEnable && simMgr != nil {
+				simMgr.Stop()
+				simMgr = nil
+				logger.Info("Simulate: stopped by config reload")
+			}
+		}
+		for {
+			select {
+			case ev := <-watcher.Events:
+				if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0 {
+					if debounce != nil {
+						debounce.Stop()
+					}
+					debounce = time.AfterFunc(debounceInterval, trigger)
+				}
+			case err := <-watcher.Errors:
+				logger.Warn("Config watch error", "error", err)
+			}
+		}
+	}()
+
+	// simulate.yaml 监听与热更新
+	go func() {
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			logger.Warn("Simulate watch init failed", "error", err)
+			return
+		}
+		defer watcher.Close()
+		path := "simulate/simulate.yaml"
+		if _, err := os.Stat(path); err != nil {
+			logger.Warn("Simulate: simulate.yaml not found, skip watch", "error", err)
+			return
+		}
+		if err := watcher.Add(path); err != nil {
+			logger.Warn("Simulate watch add failed", "error", err)
+			return
+		}
+		var debounce *time.Timer
+		debounceInterval := 300 * time.Millisecond
+		trigger := func() {
+			sc, err := simulate.LoadConfig(path)
+			if err != nil {
+				logger.Warn("Simulate: reload simulate.yaml failed", "error", err)
+				return
+			}
+			if !cfg.Server.SimulateEnable {
+				logger.Info("Simulate: reload ignored, simulate disabled")
+				return
+			}
+			if simMgr == nil {
+				mgr, err := simulate.Start(sc)
+				if err != nil {
+					logger.Warn("Simulate: start failed on simulate reload", "error", err)
+					return
+				}
+				simMgr = mgr
+				logger.Info("Simulate: started by simulate reload")
+			} else {
+				if err := simMgr.Reload(sc); err != nil {
+					logger.Warn("Simulate: hot reload failed", "error", err)
+				} else {
+					logger.Info("Simulate: hot reload success")
+				}
+			}
+		}
+		for {
+			select {
+			case ev := <-watcher.Events:
+				if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0 {
+					if debounce != nil {
+						debounce.Stop()
+					}
+					debounce = time.AfterFunc(debounceInterval, trigger)
+				}
+			case err := <-watcher.Errors:
+				logger.Warn("Simulate watch error", "error", err)
+			}
 		}
 	}()
 
