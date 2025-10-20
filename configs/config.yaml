@@ -270,7 +270,7 @@ database:
 
 # 日志配置
 log:
-  level: "debug"  # debug, info, warn, error
+  level: "debug"  # 可选：debug, info, warn, error
   format: "json"  # json, text
   output: "both"  # console, file, both
   file_path: "./logs/collector.log"
@@ -278,6 +278,11 @@ log:
   max_backups: 5
   max_age: 30  # days
   compress: true
+  modules:
+    collector:
+      level: "debug"
+    simulate:
+      level: "debug"
 
 # 采集数据存储（运行时可覆盖默认值）
 storage:

@@ -315,8 +315,8 @@ func setDefaults() {
 	// 新增：模拟服务开关默认关闭
 	viper.SetDefault("server.simulate_enable", false)
 
-	// 移除旧键：不再设置 ssh.connect_timeout 默认值
-	// （若配置文件仍包含旧键，将在 Load 阶段被新的嵌套键覆盖）
+	// 新增：日志默认级别为 info（可通过 log.level 覆盖为 debug/warn/error 等）
+	viper.SetDefault("log.level", "info")
 }
 
 // Get 获取全局配置

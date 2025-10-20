@@ -241,8 +241,8 @@ func (h *CollectorHandler) BatchExecute(c *gin.Context) {
 
 // CustomerBatchRequest 自定义采集批量请求
 type CustomerBatchRequest struct {
-	TaskID    string           `json:"task_id"`
-	TaskName  string           `json:"task_name,omitempty"`
+	TaskID      string           `json:"task_id"`
+	TaskName    string           `json:"task_name,omitempty"`
 	RetryFlag   *int             `json:"retry_flag,omitempty"`
 	TaskTimeout *int             `json:"task_timeout,omitempty"`
 	Devices     []CustomerDevice `json:"devices"`
@@ -264,8 +264,8 @@ type CustomerDevice struct {
 
 // SystemBatchRequest 系统预制采集批量请求
 type SystemBatchRequest struct {
-	TaskID     string         `json:"task_id"`
-	TaskName   string         `json:"task_name,omitempty"`
+	TaskID      string         `json:"task_id"`
+	TaskName    string         `json:"task_name,omitempty"`
 	RetryFlag   *int           `json:"retry_flag,omitempty"`
 	TaskTimeout *int           `json:"task_timeout,omitempty"`
 	DeviceList  []SystemDevice `json:"device_list"`
@@ -351,23 +351,23 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 
 			// 组装单设备请求（customer）
 			r := service.CollectRequest{
-			TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
-			TaskName:        req.TaskName,
-			CollectOrigin:   "", // 已弃用，由路由决定采集模式
-			DeviceIP:        d.DeviceIP,
-			Port:            d.Port,
-			DeviceName:      d.DeviceName,
-			DevicePlatform:  d.DevicePlatform,
-			CollectProtocol: d.CollectProtocol,
-			UserName:        d.UserName,
-			Password:        d.Password,
-			EnablePassword:  d.EnablePassword,
-			CliList:         d.CliList,
-			RetryFlag:       req.RetryFlag,
-			TaskTimeout:     req.TaskTimeout,
-			DeviceTimeout:   d.DeviceTimeout,
-			Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "customer"},
-		}
+				TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
+				TaskName:        req.TaskName,
+				CollectOrigin:   "", // 已弃用，由路由决定采集模式
+				DeviceIP:        d.DeviceIP,
+				Port:            d.Port,
+				DeviceName:      d.DeviceName,
+				DevicePlatform:  d.DevicePlatform,
+				CollectProtocol: d.CollectProtocol,
+				UserName:        d.UserName,
+				Password:        d.Password,
+				EnablePassword:  d.EnablePassword,
+				CliList:         d.CliList,
+				RetryFlag:       req.RetryFlag,
+				TaskTimeout:     req.TaskTimeout,
+				DeviceTimeout:   d.DeviceTimeout,
+				Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "customer"},
+			}
 
 			if err := h.validateCollectRequest(&r); err != nil {
 				responses[i] = map[string]interface{}{
@@ -532,23 +532,23 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 
 			// 组装单设备请求（system）
 			r := service.CollectRequest{
-			TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
-			TaskName:        req.TaskName,
-			CollectOrigin:   "", // 已弃用，由路由决定采集模式
-			DeviceIP:        d.DeviceIP,
-			Port:            d.Port,
-			DeviceName:      d.DeviceName,
-			DevicePlatform:  d.DevicePlatform,
-			CollectProtocol: d.CollectProtocol,
-			UserName:        d.UserName,
-			Password:        d.Password,
-			EnablePassword:  d.EnablePassword,
-			CliList:         cliCombined, // 预组装系统命令 + 扩展命令
-			RetryFlag:       req.RetryFlag,
-			TaskTimeout:     req.TaskTimeout,
-			DeviceTimeout:   d.DeviceTimeout,
-			Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "system"},
-		}
+				TaskID:          fmt.Sprintf("%s-%d", req.TaskID, i+1),
+				TaskName:        req.TaskName,
+				CollectOrigin:   "", // 已弃用，由路由决定采集模式
+				DeviceIP:        d.DeviceIP,
+				Port:            d.Port,
+				DeviceName:      d.DeviceName,
+				DevicePlatform:  d.DevicePlatform,
+				CollectProtocol: d.CollectProtocol,
+				UserName:        d.UserName,
+				Password:        d.Password,
+				EnablePassword:  d.EnablePassword,
+				CliList:         cliCombined, // 预组装系统命令 + 扩展命令
+				RetryFlag:       req.RetryFlag,
+				TaskTimeout:     req.TaskTimeout,
+				DeviceTimeout:   d.DeviceTimeout,
+				Metadata:        map[string]interface{}{"batch_task_id": req.TaskID, "collect_mode": "system"},
+			}
 
 			if err := h.validateCollectRequest(&r); err != nil {
 				responses[i] = map[string]interface{}{

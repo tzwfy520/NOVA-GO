@@ -1,16 +1,17 @@
 package ssh
 
 import (
-    "context"
-    "fmt"
-    "net"
-    "strings"
-    "sync"
-    "time"
+	"context"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
-    "golang.org/x/crypto/ssh"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-    "github.com/sshcollectorpro/sshcollectorpro/internal/util"
+	"golang.org/x/crypto/ssh"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/util"
 )
 
 // Config SSH配置
@@ -175,10 +176,19 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 	}
 
     // 连接SSH服务器
-    address := fmt.Sprintf("%s:%d", info.Host, info.Port)
+    // 构造地址（兼容 IPv6，处理 0.0.0.0/:: 映射到本地回环）
+    host := strings.TrimSpace(info.Host)
+    if host == "" {
+        host = "127.0.0.1"
+    }
+    lhost := strings.ToLower(host)
+    if lhost == "0.0.0.0" || lhost == "::" {
+        host = "127.0.0.1"
+    }
+    address := net.JoinHostPort(host, strconv.Itoa(info.Port))
 
     // 使用context控制连接超时
-    dialer := &net.Dialer{ Timeout: c.config.ConnectTimeout }
+    dialer := &net.Dialer{Timeout: c.config.ConnectTimeout}
 
     // 调试：拨号开始
     if dl, ok := ctx.Deadline(); ok {

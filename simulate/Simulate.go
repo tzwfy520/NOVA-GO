@@ -150,17 +150,13 @@ func (m *Manager) Stop() {
 }
 
 func newNamespaceServer(nsName string, nsCfg NamespaceConfig, simCfg *Config) (*namespaceServer, error) {
-	// 生成临时 host key（RSA 2048）
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	// 改为按 namespace 持久化 host key，避免客户端指纹频繁变化
+	signer, err := loadOrCreateHostKey(nsName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate host key: %w", err)
-	}
-	privDER := x509MarshalPKCS1PrivateKey(key)
-	signer, err := ssh.ParsePrivateKey(privDER)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse host key: %w", err)
+		return nil, fmt.Errorf("failed to init host key: %w", err)
 	}
 
+	logger.Debug("Simulate: new namespace server", "namespace", nsName, "port", nsCfg.Port)
 	return &namespaceServer{
 		nsName:  nsName,
 		cfg:     nsCfg,
@@ -177,12 +173,69 @@ func x509MarshalPKCS1PrivateKey(key *rsa.PrivateKey) []byte {
 	return pem.EncodeToMemory(blk)
 }
 
+// 新增：按 namespace 加载或生成持久化的 host key（RSA 2048）
+func loadOrCreateHostKey(_ string) (ssh.Signer, error) {
+	// 全局共享 host key 路径：simulate/_hostkey_rsa.pem
+	keyDir := filepath.Join("simulate")
+	if err := os.MkdirAll(keyDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to ensure simulate dir: %w", err)
+	}
+	keyPath := filepath.Join(keyDir, "_hostkey_rsa.pem")
+
+	// 优先尝试加载全局密钥
+	if bs, err := os.ReadFile(keyPath); err == nil {
+		signer, err := ssh.ParsePrivateKey(bs)
+		if err == nil {
+			logger.Debug("Simulate: global host key loaded", "file", keyPath)
+			return signer, nil
+		}
+		logger.Warn("Simulate: global host key parse failed, regenerating", "error", err)
+	}
+
+	// 迁移兼容：若全局密钥不存在，尝试从任何 namespace 旧位置复用
+	baseNs := filepath.Join("simulate", "namespace")
+	if entries, err := os.ReadDir(baseNs); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			old := filepath.Join(baseNs, e.Name(), "_hostkey_rsa.pem")
+			if bs, err := os.ReadFile(old); err == nil {
+				if err := os.WriteFile(keyPath, bs, 0o600); err == nil {
+					signer, perr := ssh.ParsePrivateKey(bs)
+					if perr == nil {
+						logger.Info("Simulate: migrated host key from namespace", "namespace", e.Name(), "file", keyPath)
+						return signer, nil
+					}
+				}
+			}
+		}
+	}
+
+	// 不存在或迁移失败则生成新密钥并持久化
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate host key: %w", err)
+	}
+	pemBytes := x509MarshalPKCS1PrivateKey(key)
+	if writeErr := os.WriteFile(keyPath, pemBytes, 0o600); writeErr != nil {
+		return nil, fmt.Errorf("failed to write host key: %w", writeErr)
+	}
+	signer, err := ssh.ParsePrivateKey(pemBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse generated host key: %w", err)
+	}
+	logger.Info("Simulate: global host key generated", "file", keyPath)
+	return signer, nil
+}
+
 func (s *namespaceServer) start() error {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.Port))
 	if err != nil {
 		return err
 	}
 	s.listener = ln
+	logger.Debug("Simulate: listener started", "namespace", s.nsName, "port", s.cfg.Port)
 
 	go func() {
 		for {
@@ -196,12 +249,14 @@ func (s *namespaceServer) start() error {
 				// listener closed
 				return
 			}
+			logger.Debug("Simulate: accept connection", "namespace", s.nsName, "remote", conn.RemoteAddr().String())
 			// 并发限制
 			s.mu.Lock()
 			if s.cfg.MaxConn > 0 && s.active >= s.cfg.MaxConn {
 				s.mu.Unlock()
 				_ = conn.Close()
 				logger.Warn("Simulate: reject connection, max_conn exceeded", "namespace", s.nsName)
+				logger.Debug("Simulate: active", "active", s.active)
 				continue
 			}
 			s.active++
@@ -230,27 +285,33 @@ func (s *namespaceServer) stop() {
 
 func (s *namespaceServer) handleConn(nc net.Conn) {
 	// 构造 SSH ServerConfig：允许任意用户名（作为设备名），密码统一为 nova
+	logger.Debug("Simulate: handshake start", "namespace", s.nsName, "remote", nc.RemoteAddr().String())
 	srvCfg := &ssh.ServerConfig{
 		NoClientAuth: false,
 		PasswordCallback: func(connMetadata ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 			user := strings.TrimSpace(connMetadata.User())
-			_ = user // 用户名用作设备名，不参与认证判断
 			pass := strings.TrimSpace(string(password))
+			logger.Debug("Simulate: auth try (password)", "user", user)
 			if pass == "nova" {
+				logger.Debug("Simulate: auth success (password)", "user", user)
 				return nil, nil
 			}
+			logger.Debug("Simulate: auth failed (password)", "user", user)
 			return nil, fmt.Errorf("access denied")
 		},
 		KeyboardInteractiveCallback: func(connMetadata ssh.ConnMetadata, challenge ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
 			// 兼容部分客户端默认使用 keyboard-interactive 的情况
-			// 向客户端发送一次密码提示，并校验返回的答案
+			logger.Debug("Simulate: auth try (keyboard-interactive)", "user", connMetadata.User())
 			answers, err := challenge(connMetadata.User(), "Authentication", []string{"Password:"}, []bool{false})
 			if err != nil {
+				logger.Debug("Simulate: auth failed (ki challenge)", "error", err)
 				return nil, err
 			}
 			if len(answers) > 0 && strings.TrimSpace(answers[0]) == "nova" {
+				logger.Debug("Simulate: auth success (keyboard-interactive)", "user", connMetadata.User())
 				return nil, nil
 			}
+			logger.Debug("Simulate: auth failed (keyboard-interactive)", "user", connMetadata.User())
 			return nil, fmt.Errorf("access denied")
 		},
 	}
@@ -259,10 +320,11 @@ func (s *namespaceServer) handleConn(nc net.Conn) {
 	// 完成握手
 	conn, chans, reqs, err := ssh.NewServerConn(nc, srvCfg)
 	if err != nil {
-		logger.Error("Simulate: SSH handshake failed", "namespace", s.nsName, "error", err)
+		logger.Error("Simulate: SSH handshake failed", "namespace", s.nsName, "remote", nc.RemoteAddr().String(), "error", err)
 		_ = nc.Close()
 		return
 	}
+	logger.Debug("Simulate: handshake success", "namespace", s.nsName, "user", conn.User(), "remote", nc.RemoteAddr().String(), "client", string(conn.ClientVersion()))
 	defer conn.Close()
 
 	// 丢弃全局请求
@@ -270,6 +332,7 @@ func (s *namespaceServer) handleConn(nc net.Conn) {
 
 	// 处理会话通道
 	for ch := range chans {
+		logger.Debug("Simulate: channel type", "type", ch.ChannelType())
 		if ch.ChannelType() != "session" {
 			ch.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
@@ -279,6 +342,7 @@ func (s *namespaceServer) handleConn(nc net.Conn) {
 			logger.Error("Simulate: channel accept failed", "error", err)
 			continue
 		}
+		logger.Debug("Simulate: session channel accepted", "namespace", s.nsName, "user", conn.User())
 
 		// 设备名称使用用户名
 		deviceName := conn.User()
@@ -287,6 +351,7 @@ func (s *namespaceServer) handleConn(nc net.Conn) {
 		enableRequired := devType.EnableModeRequired
 		enableSuffix := devType.EnableModeSuffix
 
+		logger.Debug("Simulate: device resolved", "device", deviceName, "prompt_suffix", promptSuffix, "enable_required", enableRequired, "enable_suffix", enableSuffix)
 		// 处理请求（pty-req / shell / exec）
 		go s.handleSession(channel, requests, deviceName, promptSuffix, enableRequired, enableSuffix)
 	}
@@ -315,8 +380,10 @@ func (s *namespaceServer) handleSession(channel ssh.Channel, requests <-chan *ss
 		case "pty-req":
 			ptyReady = true
 			req.Reply(true, nil)
+			logger.Debug("Simulate: pty-req ok", "device", deviceName)
 		case "shell":
 			req.Reply(true, nil)
+			logger.Debug("Simulate: shell start", "device", deviceName)
 			// 进入交互式 shell
 			s.runInteractiveShell(channel, deviceName, promptSuffix, enableRequired, enableSuffix)
 			return
@@ -325,8 +392,10 @@ func (s *namespaceServer) handleSession(channel ssh.Channel, requests <-chan *ss
 			cmd := string(req.Payload)
 			// OpenSSH 发送的 payload 包含命令长度等结构；简单处理：提取最后一个可见字符串
 			cmd = extractCommandFromPayload(cmd)
+			logger.Debug("Simulate: exec cmd", "device", deviceName, "cmd", cmd)
 			out := s.loadCommandOutput(s.nsName, deviceName, cmd)
 			if out == "" {
+				logger.Debug("Simulate: exec unmatched", "cmd", cmd)
 				out = "unsupportted command\r\n"
 			}
 			channel.Write([]byte(out))
@@ -337,6 +406,7 @@ func (s *namespaceServer) handleSession(channel ssh.Channel, requests <-chan *ss
 			return
 		default:
 			req.Reply(false, nil)
+			logger.Debug("Simulate: unknown request", "type", req.Type)
 		}
 	}
 }
@@ -348,6 +418,7 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 		channel.Write([]byte(fmt.Sprintf("%s%s\r\n", deviceName, currentSuffix)))
 	}
 	printPrompt()
+	logger.Debug("Simulate: prompt printed", "device", deviceName, "suffix", currentSuffix)
 
 	reader := bufio.NewReader(channel)
 
@@ -364,6 +435,7 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 			select {
 			case <-idleTimer.C:
 				channel.Write([]byte("\r\nSession closed due to idle timeout.\r\n"))
+				logger.Debug("Simulate: session idle timeout", "device", deviceName)
 				return
 			default:
 			}
@@ -373,20 +445,24 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
+				logger.Debug("Simulate: session EOF", "device", deviceName)
 				return
 			}
 			// 某些客户端用 CR 结束
 			if errorsIs(err, io.ErrUnexpectedEOF) {
 				// 尝试读取剩余
 				if line == "" {
+					logger.Debug("Simulate: session unexpected EOF with empty line", "device", deviceName)
 					return
 				}
 			} else {
+				logger.Debug("Simulate: session read error", "device", deviceName, "error", err)
 				return
 			}
 		}
 
 		cmd := strings.TrimSpace(cleanNewlines(line))
+		logger.Debug("Simulate: input", "device", deviceName, "cmd", cmd)
 		if cmd == "" {
 			// 1) 无命令输入，显示新的一行
 			channel.Write([]byte("\r\n"))
@@ -397,24 +473,29 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 		// 重置 idle timer
 		if idleTimer != nil {
 			idleTimer.Reset(time.Duration(idle) * time.Second)
+			logger.Debug("Simulate: idle timer reset", "device", deviceName)
 		}
 
 		// 处理退出
 		if equalAny(cmd, "exit", "quit") {
 			channel.Write([]byte("\r\n"))
+			logger.Debug("Simulate: session exit", "device", deviceName)
 			return
 		}
 
 		// 处理 enable：统一要求提权密码为 nova
 		if enableRequired && strings.EqualFold(cmd, "enable") {
+			logger.Debug("Simulate: enable requested", "device", deviceName)
 			channel.Write([]byte("Password:\r\n"))
 			pwd, _ := reader.ReadString('\n')
 			if strings.TrimSpace(cleanNewlines(pwd)) != "nova" {
 				channel.Write([]byte("Bad secrets\r\n"))
+				logger.Debug("Simulate: enable failed", "device", deviceName)
 				printPrompt()
 				continue
 			}
 			currentSuffix = chooseNonEmpty(enableSuffix, "#")
+			logger.Debug("Simulate: enable success", "device", deviceName, "suffix", currentSuffix)
 			printPrompt()
 			continue
 		}
@@ -423,6 +504,7 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 		out := s.loadCommandOutput(s.nsName, deviceName, cmd)
 		if out == "" {
 			// 3) 未匹配：显示固定文案
+			logger.Debug("Simulate: command unmatched", "device", deviceName, "cmd", cmd)
 			out = "unsupportted command\r\n"
 		}
 		// 2) 匹配：显示 txt 文件内容（已按 CRLF 标准化）
@@ -436,14 +518,17 @@ func (s *namespaceServer) loadCommandOutput(ns, deviceName, cmd string) string {
 	// 尝试原命令名称
 	p1 := filepath.Join(base, fmt.Sprintf("%s.txt", cmd))
 	if bs, err := os.ReadFile(p1); err == nil {
+		logger.Debug("Simulate: load out (direct)", "device", deviceName, "cmd", cmd, "file", p1)
 		return ensureCRLF(string(bs))
 	}
 	// 尝试替换空格为下划线
 	normalized := strings.ReplaceAll(cmd, " ", "_")
 	p2 := filepath.Join(base, fmt.Sprintf("%s.txt", normalized))
 	if bs, err := os.ReadFile(p2); err == nil {
+		logger.Debug("Simulate: load out (normalized)", "device", deviceName, "cmd", cmd, "file", p2)
 		return ensureCRLF(string(bs))
 	}
+	logger.Debug("Simulate: load out (miss)", "device", deviceName, "cmd", cmd)
 	return ""
 }
 
@@ -460,9 +545,12 @@ func extractCommandFromPayload(payload string) string {
 }
 
 func ensureCRLF(s string) string {
-	// 将 \n 规范为 \r\n
+	// 将 \n 规范为 \r\n，并保证结尾有一行结束符，避免客户端在首条短输出后因未读到有效“内容行”而跳过提示符导致卡住
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\n", "\r\n")
+	if !strings.HasSuffix(s, "\r\n") {
+		s += "\r\n"
+	}
 	return s
 }
 

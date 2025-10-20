@@ -105,6 +105,12 @@ func main() {
                 } else {
                     simMgr = mgr
                     logger.Info("Simulate: started", "namespaces", len(sc.Namespace))
+                    // 汇总输出所有命名空间端口，便于快速确认
+                    ports := make([]string, 0, len(sc.Namespace))
+                    for ns, nsCfg := range sc.Namespace {
+                        ports = append(ports, fmt.Sprintf("%s:%d", ns, nsCfg.Port))
+                    }
+                    logger.Info("Simulate: ports enabled", "ports", strings.Join(ports, ", "))
                 }
             }
         }
