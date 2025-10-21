@@ -1,0 +1,300 @@
+# 测试手段
+1）使用cmd/auto_run脚本重启应用
+2）针对不同的测试类型，每个类型生成测试验证脚本。
+3）针对不同的测试对象设备，根据信息生成测试json数据，作为测试脚本参数
+4）目录
+- 测试数据放入test/data目录下，按照测试了分类/设备类型.json格式存储
+- 测试脚本放入test/script目录下，按照分类.sh命令
+
+# 信息采集测试
+## 接口
+/api/v1/collector/batch/custom
+## 测试参数示例
+{
+  "task_id": "T-2001",
+  "task_name": "custom-batch-check",
+  "retry_flag": 0,
+  "timeout": 15,
+  "devices": [
+    {
+      "device_ip": "139.196.196.96",
+      "port": 21202,
+      "device_name": "test-out-r1",
+      "device_platform": "h3c_sr",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "cli_list": [
+        "display version",
+        "display license"
+      ]
+    },
+    {
+      "device_ip": "139.196.196.96",
+      "port": 21201,
+      "device_name": "test-out-sw1",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "cli_list": [
+        "show version",
+        "show run"
+      ]
+    },
+    {
+      "device_ip": "10.200.40.202",
+      "port": 22,
+      "device_name": "test-out-r1",
+      "device_platform": "h3c_sr",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "cli_list": [
+        "display version",
+        "display license"
+      ]
+    },
+    {
+      "device_ip": "115.190.80.219",
+      "port": 22,
+      "device_name": "huoshan-1",
+      "device_platform": "linux_ubuntu",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "ff@123qwe",
+      "enable_password": "ff@123qwe",
+      "cli_list": [
+        "cat mascot/README.md",
+        "uname -a"
+      ]
+    }
+  ]
+}
+
+
+# 配置备份测试
+## 接口
+api/v1/backup/batch
+
+## 测试参数示例
+### minio存储方式
+{   
+	"task_id": "t-20251017-0001",
+	"task_name": "daily-backup",
+	"task_batch": 1,   
+	"save_dir": "auto_save",
+	"storage_backend": "minio",
+	"task_timeout": 20,
+	"devices": [
+		{
+	      "device_ip": "139.196.196.96",
+	      "device_port": 21203,
+	      "device_name": "test-out-r2",
+	      "device_platform": "h3c_sr",
+	      "collect_protocol": "ssh",
+	      "user_name": "eccom123",
+	      "password": "Eccom@12345",
+	      "enable_password": "Eccom@12345",
+        "cli_list":
+          [
+          "display curr",
+          "display version"
+          ]     
+		},
+		{
+	      "device_ip": "139.196.196.96",
+	      "device_port": 21202,
+	      "device_name": "test-out-r1",
+	      "device_platform": "h3c_sr",
+	      "collect_protocol": "ssh",
+	      "user_name": "eccom123",
+	      "password": "Eccom@12345",
+	      "enable_password": "Eccom@12345",
+        "cli_list":
+          [
+          "display curr",
+          "display version"
+          ]     
+		},
+		{
+			"device_ip": "115.190.80.219",
+			"device_port": 22,
+			"device_name": "huoshan-1",
+			"device_platform": "linux",
+			"collect_protocol": "ssh",
+			"user_name": "eccom123",
+			"password": "Ff@123qwe",
+			"enable_password": "Ff@123qwe",
+			"cli_list": [
+				"cat mascot/README.md",
+				"uname -a"
+			]
+		} 
+	]
+}
+
+
+### local存储方式
+{   
+	"task_id": "t-20251017-0001",
+	"task_name": "daily-backup",
+	"task_batch": 1,
+	"retry_flag": 2,
+	"save_dir": "auto_save",
+	"storage_backend": "local",
+	"task_timeout": 20,
+	"devices": [
+		{
+	      "device_ip": "139.196.196.96",
+	      "device_port": 21203,
+	      "device_name": "test-out-r1",
+	      "device_platform": "h3c_sr",
+	      "collect_protocol": "ssh",
+	      "user_name": "eccom123",
+	      "password": "Eccom@12345",
+          "cli_list":
+			[
+			"display curr",
+			"display version"
+			]     
+		},
+		{
+			"device_ip": "139.196.196.96",
+			"device_port": 21201,
+			"device_name": "test-out-sw1",
+			"device_platform": "cisco_ios",
+			"collect_protocol": "ssh",
+			"user_name": "eccom123",
+			"password": "Eccom@12345",
+			"enable_password": "Eccom@12345",
+			"cli_list":
+				[
+				"display curr",
+				"display version"
+				]     
+		},
+		{
+			"device_ip": "115.190.80.219",
+			"device_port": 22,
+			"device_name": "huoshan-1",
+			"device_platform": "linux_ubuntu",
+			"collect_protocol": "ssh",
+			"user_name": "eccom123",
+			"password": "Ff@123qwe",
+			"enable_password": "Ff@123qwe",
+			"cli_list": [
+				"cat mascot/README.md",
+				"uname -a"
+			]
+		} 
+	]
+}
+# 批量数据格式化测试
+## 接口
+api/v1/formatted/batch
+## 测试参考数据
+{
+  "task_id": "DEMO-20251016-01",
+  "task_name": "formatted-batch-demo",
+  "task_batch": 1,
+  "retry_flag": 1,
+  "save_dir": "demo",
+  "timeout": 45,
+  "fsm_templates": [
+    {
+      "device_platform": "cisco_ios",
+      "templates_values": [
+        {"cli_name": "show running-config", "fsm_value": "fsm RC v1"},
+        {"cli_name": "show version", "fsm_value": "fsm SV v1"}
+      ]
+    }
+  ],
+  "devices": [
+    {
+      "device_ip": "139.196.196.96",
+      "device_port": 21201,
+      "device_name": "test-out-r1",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "enable_password": "Eccom@12345",
+      "cli_list": ["show running-config", "show version"]
+    }
+  ]
+}
+
+
+# 快速格式化接口
+## 接口
+api/v1/formatted/fast
+## 测试参考参数
+{
+  "task_id": "DEMO-20251017-FAST-01",
+  "task_name": "formatted-fast-demo",
+  "retry_flag": 1,
+  "timeout": 30,
+  "fsm_templates": [
+    {
+      "device_platform": "cisco_ios",
+      "templates_values": [
+        {"cli_name": "show version", "fsm_value": "Value HOSTNAME (\\S+)\nValue UPTIME (.+)\n\nStart\n  ^\\s*${HOSTNAME}\\s+uptime\\s+is\\s+${UPTIME} -> Continue"}
+      ]
+    }
+  ],
+  "device": [
+    {
+      "device_ip": "139.196.196.96",
+      "device_port": 21201,
+      "device_name": "test-out-r1",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "enable_password": "Eccom@12345",
+      "cli": "show version"
+    }
+  ]
+}
+
+# 配置下发测试
+## 接口
+http://localhost:18000/api/v1/deploy/fast
+
+## 测试数据参考
+### 思科
+{
+  "task_id": "DEMO-20251017-01",
+  "task_name": "config-deploy-demo",
+  "retry_flag": 1,
+  "task_type": "exec",
+  "task_timeout": 15,
+  "status_check_enable": 1,
+  "devices": [
+    {
+      "device_ip": "139.196.196.96",
+      "device_port": 21201,
+      "device_name": "test-out-sw1",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "enable_password": "Eccom@12345",
+      "status_check_list": ["terminal length 0", "show running-config", "show version"],
+      "config_deploy": "interface g1/0\ndescri test123456\nundo shutdown\n"
+    },
+    {
+      "device_ip": "139.196.196.96",
+      "device_port": 21202,
+      "device_name": "test-out-r1",
+      "device_platform": "h3c",
+      "collect_protocol": "ssh",
+      "user_name": "eccom123",
+      "password": "Eccom@12345",
+      "enable_password": "Eccom@12345",
+      "status_check_list": ["display ip int br", "display curr"],
+      "config_deploy": "interface g6/0\ndescri test1234\nshutdown\ndo shutdown\n"
+    }
+  ]
+}

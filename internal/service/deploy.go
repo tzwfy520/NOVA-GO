@@ -55,18 +55,18 @@ type DeployFastRequest struct {
 
 // DeployDevice 单设备参数
 type DeployDevice struct {
-	DeviceIP        string  `json:"device_ip"`
-	DeviceName      string  `json:"device_name"`
-	DevicePlatform  string  `json:"device_platform"`
-	DevicePort      int     `json:"device_port"`
-	CollectProtocol string  `json:"collect_protocol"`
-	UserName        string  `json:"user_name"`
-	Password        string  `json:"password"`
-	EnablePassword  string  `json:"enable_password"`
+	DeviceIP        string   `json:"device_ip"`
+	DeviceName      string   `json:"device_name"`
+	DevicePlatform  string   `json:"device_platform"`
+	DevicePort      int      `json:"device_port"`
+	CollectProtocol string   `json:"collect_protocol"`
+	UserName        string   `json:"user_name"`
+	Password        string   `json:"password"`
+	EnablePassword  string   `json:"enable_password"`
 	CliList         []string `json:"cli_list"`
 	StatusCheckList []string `json:"status_check_list"`
-	ConfigDeploy    string  `json:"config_deploy"`
-	DeviceTimeout   *int    `json:"device_timeout,omitempty"`
+	ConfigDeploy    string   `json:"config_deploy"`
+	DeviceTimeout   *int     `json:"device_timeout,omitempty"`
 }
 
 // DeployFastResponse 响应
@@ -79,19 +79,21 @@ type DeployFastResponse struct {
 
 // 单设备结果
 type DeployDeviceResult struct {
-	DeviceIP           string            `json:"device_ip"`
-	DeviceName         string            `json:"device_name"`
-	DevicePlatform     string            `json:"device_platform"`
-	DeviceStatusBefore map[string]string `json:"device_status_before,omitempty"`
-	DeviceStatusAfter  map[string]string `json:"device_status_after,omitempty"`
-	DeployLogExec      []CommandResult   `json:"deploy_log_exec"`
-	DeployLogsAggregated []CommandResult `json:"deploy_logs_aggregated,omitempty"`
-	Error              string            `json:"error,omitempty"`
+	DeviceIP             string            `json:"device_ip"`
+	DeviceName           string            `json:"device_name"`
+	DevicePlatform       string            `json:"device_platform"`
+	DeviceStatusBefore   map[string]string `json:"device_status_before,omitempty"`
+	DeviceStatusAfter    map[string]string `json:"device_status_after,omitempty"`
+	DeployLogExec        []CommandResult   `json:"deploy_log_exec"`
+	DeployLogsAggregated []CommandResult   `json:"deploy_logs_aggregated,omitempty"`
+	Error                string            `json:"error,omitempty"`
 }
 
 func canonical(cmd string) string {
 	s := strings.TrimSpace(cmd)
-	if s == "" { return s }
+	if s == "" {
+		return s
+	}
 	// 常见清理：压缩空白与小写化，利于匹配过滤
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\t", " ")
@@ -99,11 +101,12 @@ func canonical(cmd string) string {
 	return strings.ToLower(s)
 }
 
-
 // 读取平台默认配置（设备默认）
 func (s *DeployService) getDefaults(platform string) (config.PlatformDefaultsConfig, bool) {
 	p := strings.TrimSpace(strings.ToLower(platform))
-	if p == "" { p = "default" }
+	if p == "" {
+		p = "default"
+	}
 	// 优先精确匹配
 	if s.cfg != nil && s.cfg.Collector.DeviceDefaults != nil {
 		if dd, ok := s.cfg.Collector.DeviceDefaults[p]; ok {
@@ -112,7 +115,9 @@ func (s *DeployService) getDefaults(platform string) (config.PlatformDefaultsCon
 		// 前缀兜底：当 key 为平台前缀时也可匹配（如 huawei、h3c、cisco_ios、linux）
 		for key, v := range s.cfg.Collector.DeviceDefaults {
 			kk := strings.TrimSpace(strings.ToLower(key))
-			if kk == "" { continue }
+			if kk == "" {
+				continue
+			}
 			if strings.HasPrefix(p, kk) {
 				return v, true
 			}
@@ -134,10 +139,16 @@ func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*De
 		// 计算有效超时：优先设备级，其次任务级，再次全局，最后回退 15s
 		effTimeout := req.TaskTimeout
 		if effTimeout <= 0 {
-			if s.cfg != nil && s.cfg.SSH.Timeout > 0 { effTimeout = int(s.cfg.SSH.Timeout.Seconds()) } else { effTimeout = 15 }
+			if s.cfg != nil && s.cfg.SSH.Timeout > 0 {
+				effTimeout = int(s.cfg.SSH.Timeout.Seconds())
+			} else {
+				effTimeout = 15
+			}
 		}
 		devTimeout := effTimeout
-		if d.DeviceTimeout != nil && *d.DeviceTimeout > 0 { devTimeout = *d.DeviceTimeout }
+		if d.DeviceTimeout != nil && *d.DeviceTimeout > 0 {
+			devTimeout = *d.DeviceTimeout
+		}
 		sshTimeout := time.Duration(devTimeout) * time.Second
 		// 步骤控制标志与执行间隔
 		needsStatus := (statusEnable == 1) && (len(d.StatusCheckList) > 0) && (s.collector != nil)
@@ -219,26 +230,26 @@ func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*De
 				cmdInterval = 120
 			}
 			opts := &ssh.InteractiveOptions{
-				EnablePassword:            strings.TrimSpace(d.EnablePassword),
-				LoginPassword:             strings.TrimSpace(d.Password),
-				EnableCLI:                 p.EnableCLI,
-				EnableExpectOutput:        p.EnableExceptOutput,
-				ExitCommands:              []string{"exit"},
-				CommandIntervalMS:         cmdInterval,
-				AutoInteractions:          p.AutoInteractions,
-				SkipDelayedEcho:           p.SkipDelayedEcho,
-				PerCommandTimeoutSec:      p.CommandTimeoutSec,
-				QuietAfterMS:              p.QuietAfterMS,
-				QuietPollIntervalMS:       p.QuietPollIntervalMS,
-				EnablePasswordFallbackMS:  p.EnablePasswordFallbackMS,
-				PromptInducerIntervalMS:   p.PromptInducerIntervalMS,
-				PromptInducerMaxCount:     p.PromptInducerMaxCount,
-				ExitPauseMS:               p.ExitPauseMS,
+				EnablePassword:           strings.TrimSpace(d.EnablePassword),
+				LoginPassword:            strings.TrimSpace(d.Password),
+				EnableCLI:                p.EnableCLI,
+				EnableExpectOutput:       p.EnableExceptOutput,
+				ExitCommands:             []string{"exit"},
+				CommandIntervalMS:        cmdInterval,
+				AutoInteractions:         p.AutoInteractions,
+				SkipDelayedEcho:          p.SkipDelayedEcho,
+				PerCommandTimeoutSec:     p.CommandTimeoutSec,
+				QuietAfterMS:             p.QuietAfterMS,
+				QuietPollIntervalMS:      p.QuietPollIntervalMS,
+				EnablePasswordFallbackMS: p.EnablePasswordFallbackMS,
+				PromptInducerIntervalMS:  p.PromptInducerIntervalMS,
+				PromptInducerMaxCount:    p.PromptInducerMaxCount,
+				ExitPauseMS:              p.ExitPauseMS,
 				// 新增：用于精确提示符判定
-				DeviceName:                strings.TrimSpace(d.DeviceName),
+				DeviceName: strings.TrimSpace(d.DeviceName),
 				// 新增：设备平台用于区分不同平台的处理逻辑
-				DevicePlatform:            strings.TrimSpace(d.DevicePlatform),
-				PromptSuffixes:            p.PromptSuffixes,
+				DevicePlatform: strings.TrimSpace(d.DevicePlatform),
+				PromptSuffixes: p.PromptSuffixes,
 			}
 			// 用户下发序列（预命令 + 进入配置模式 + 用户命令 + 退出配置模式）
 			pre := s.getPreCommands(d.DevicePlatform)
@@ -310,9 +321,13 @@ func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*De
 					// 命中任一错误提示则认为下发失败，标记 ExitCode=-1
 					for _, hint := range pi.ErrorHints {
 						h := strings.ToLower(strings.TrimSpace(hint))
-						if h == "" { continue }
+						if h == "" {
+							continue
+						}
 						if strings.Contains(outLower, h) {
-							if filteredLogs[i].ExitCode == 0 { filteredLogs[i].ExitCode = -1 }
+							if filteredLogs[i].ExitCode == 0 {
+								filteredLogs[i].ExitCode = -1
+							}
 							if strings.TrimSpace(filteredLogs[i].Error) == "" {
 								filteredLogs[i].Error = "deployment command error detected"
 							}
@@ -332,12 +347,16 @@ func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*De
 			// 使用 config_deploy 或 cli_list 构造聚合命令行，便于前端显示
 			userCmds := make([]string, 0, len(d.CliList))
 			for _, c := range d.CliList {
-				if t := strings.TrimSpace(c); t != "" { userCmds = append(userCmds, t) }
+				if t := strings.TrimSpace(c); t != "" {
+					userCmds = append(userCmds, t)
+				}
 			}
 			if len(userCmds) == 0 && strings.TrimSpace(d.ConfigDeploy) != "" {
 				raw := strings.ReplaceAll(d.ConfigDeploy, "\r\n", "\n")
 				for _, ln := range strings.Split(raw, "\n") {
-					if t := strings.TrimSpace(ln); t != "" { userCmds = append(userCmds, t) }
+					if t := strings.TrimSpace(ln); t != "" {
+						userCmds = append(userCmds, t)
+					}
 				}
 			}
 			agg := s.aggregateDeployLogs(userCmds, filteredLogs)
@@ -397,33 +416,37 @@ func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*De
 
 // getPlatformInteract 读取平台交互默认，避免与其他服务深耦合，这里做最小复制
 type platformInteract struct {
-	PromptSuffixes     []string
-	AutoInteractions   []ssh.AutoInteraction
-	SkipDelayedEcho    bool
-	EnableCLI          string
-	EnableExceptOutput string
-	ErrorHints         []string
-	CommandIntervalMS         int
-	CommandTimeoutSec         int
-	QuietAfterMS              int
-	QuietPollIntervalMS       int
-	EnablePasswordFallbackMS  int
-	PromptInducerIntervalMS   int
-	PromptInducerMaxCount     int
-	ExitPauseMS               int
+	PromptSuffixes           []string
+	AutoInteractions         []ssh.AutoInteraction
+	SkipDelayedEcho          bool
+	EnableCLI                string
+	EnableExceptOutput       string
+	ErrorHints               []string
+	CommandIntervalMS        int
+	CommandTimeoutSec        int
+	QuietAfterMS             int
+	QuietPollIntervalMS      int
+	EnablePasswordFallbackMS int
+	PromptInducerIntervalMS  int
+	PromptInducerMaxCount    int
+	ExitPauseMS              int
 }
 
 func (s *DeployService) getPlatformInteract(platform string) platformInteract {
 	dd, ok := s.getDefaults(platform)
 	p := platformInteract{}
-	if !ok { return p }
+	if !ok {
+		return p
+	}
 	p.PromptSuffixes = append([]string{}, dd.PromptSuffixes...)
 	// 转换配置中的自动交互项到 SSH 类型
 	p.AutoInteractions = make([]ssh.AutoInteraction, 0, len(dd.Interact.AutoInteractions))
 	for _, ai := range dd.Interact.AutoInteractions {
 		e := strings.TrimSpace(ai.ExpectOutput)
 		s := strings.TrimSpace(ai.AutoSend)
-		if e == "" || s == "" { continue }
+		if e == "" || s == "" {
+			continue
+		}
 		p.AutoInteractions = append(p.AutoInteractions, ssh.AutoInteraction{ExpectOutput: e, AutoSend: s})
 	}
 	p.SkipDelayedEcho = dd.SkipDelayedEcho
@@ -431,14 +454,46 @@ func (s *DeployService) getPlatformInteract(platform string) platformInteract {
 	p.EnableExceptOutput = dd.EnableExceptOutput
 	p.ErrorHints = append([]string{}, dd.Interact.ErrorHints...)
 	// 交互节奏回退
-	if dd.Timeout.Interact.CommandIntervalMS > 0 { p.CommandIntervalMS = dd.Timeout.Interact.CommandIntervalMS } else { p.CommandIntervalMS = 120 }
-	if dd.Timeout.Interact.CommandTimeoutSec > 0 { p.CommandTimeoutSec = dd.Timeout.Interact.CommandTimeoutSec } else { p.CommandTimeoutSec = 30 }
-	if dd.Timeout.Interact.QuietAfterMS > 0 { p.QuietAfterMS = dd.Timeout.Interact.QuietAfterMS } else { p.QuietAfterMS = 800 }
-	if dd.Timeout.Interact.QuietPollIntervalMS > 0 { p.QuietPollIntervalMS = dd.Timeout.Interact.QuietPollIntervalMS } else { p.QuietPollIntervalMS = 250 }
-	if dd.Timeout.Interact.EnablePasswordFallbackMS > 0 { p.EnablePasswordFallbackMS = dd.Timeout.Interact.EnablePasswordFallbackMS } else { p.EnablePasswordFallbackMS = 1500 }
-	if dd.Timeout.Interact.PromptInducerIntervalMS > 0 { p.PromptInducerIntervalMS = dd.Timeout.Interact.PromptInducerIntervalMS } else { p.PromptInducerIntervalMS = 1000 }
-	if dd.Timeout.Interact.PromptInducerMaxCount > 0 { p.PromptInducerMaxCount = dd.Timeout.Interact.PromptInducerMaxCount } else { p.PromptInducerMaxCount = 12 }
-	if dd.Timeout.Interact.ExitPauseMS > 0 { p.ExitPauseMS = dd.Timeout.Interact.ExitPauseMS } else { p.ExitPauseMS = 150 }
+	if dd.Timeout.Interact.CommandIntervalMS > 0 {
+		p.CommandIntervalMS = dd.Timeout.Interact.CommandIntervalMS
+	} else {
+		p.CommandIntervalMS = 120
+	}
+	if dd.Timeout.Interact.CommandTimeoutSec > 0 {
+		p.CommandTimeoutSec = dd.Timeout.Interact.CommandTimeoutSec
+	} else {
+		p.CommandTimeoutSec = 30
+	}
+	if dd.Timeout.Interact.QuietAfterMS > 0 {
+		p.QuietAfterMS = dd.Timeout.Interact.QuietAfterMS
+	} else {
+		p.QuietAfterMS = 800
+	}
+	if dd.Timeout.Interact.QuietPollIntervalMS > 0 {
+		p.QuietPollIntervalMS = dd.Timeout.Interact.QuietPollIntervalMS
+	} else {
+		p.QuietPollIntervalMS = 250
+	}
+	if dd.Timeout.Interact.EnablePasswordFallbackMS > 0 {
+		p.EnablePasswordFallbackMS = dd.Timeout.Interact.EnablePasswordFallbackMS
+	} else {
+		p.EnablePasswordFallbackMS = 1500
+	}
+	if dd.Timeout.Interact.PromptInducerIntervalMS > 0 {
+		p.PromptInducerIntervalMS = dd.Timeout.Interact.PromptInducerIntervalMS
+	} else {
+		p.PromptInducerIntervalMS = 1000
+	}
+	if dd.Timeout.Interact.PromptInducerMaxCount > 0 {
+		p.PromptInducerMaxCount = dd.Timeout.Interact.PromptInducerMaxCount
+	} else {
+		p.PromptInducerMaxCount = 12
+	}
+	if dd.Timeout.Interact.ExitPauseMS > 0 {
+		p.ExitPauseMS = dd.Timeout.Interact.ExitPauseMS
+	} else {
+		p.ExitPauseMS = 150
+	}
 	return p
 }
 
@@ -446,17 +501,21 @@ func (s *DeployService) getPlatformInteract(platform string) platformInteract {
 func (s *DeployService) getPreCommands(platform string) []string {
 	cmds := []string{}
 	dd, ok := s.getDefaults(platform)
-	if !ok { return cmds }
-	
+	if !ok {
+		return cmds
+	}
+
 	// 如果平台需要enable，先添加enable命令
 	if dd.EnableRequired && strings.TrimSpace(dd.EnableCLI) != "" {
 		cmds = append(cmds, strings.TrimSpace(dd.EnableCLI))
 	}
-	
+
 	// 添加关闭分页命令
 	for _, c := range dd.DisablePagingCmds {
 		t := strings.TrimSpace(c)
-		if t == "" { continue }
+		if t == "" {
+			continue
+		}
 		cmds = append(cmds, t)
 	}
 	return cmds
@@ -466,10 +525,14 @@ func (s *DeployService) getPreCommands(platform string) []string {
 func (s *DeployService) getConfigModeCmds(platform string) []string {
 	cmds := []string{}
 	dd, ok := s.getDefaults(platform)
-	if !ok { return cmds }
+	if !ok {
+		return cmds
+	}
 	for _, c := range dd.ConfigModeCLIs {
 		t := strings.TrimSpace(c)
-		if t != "" { cmds = append(cmds, t) }
+		if t != "" {
+			cmds = append(cmds, t)
+		}
 	}
 	return cmds
 }
@@ -477,24 +540,30 @@ func (s *DeployService) getConfigModeCmds(platform string) []string {
 // 获取平台退出配置模式命令
 func (s *DeployService) getConfigExitCmd(platform string) string {
 	dd, ok := s.getDefaults(platform)
-	if !ok { return "" }
+	if !ok {
+		return ""
+	}
 	return strings.TrimSpace(dd.ConfigExitCLI)
 }
 
 // runCommandsDetailed 返回详细执行日志（逐条）
 func (s *DeployService) runCommandsDetailed(ctx context.Context, cli *ssh.Client, cmds []string, promptSuffixes []string, opts *ssh.InteractiveOptions) []CommandResult {
 	logs := make([]CommandResult, 0, len(cmds))
-	if len(cmds) == 0 { return logs }
+	if len(cmds) == 0 {
+		return logs
+	}
 	results, err := cli.ExecuteInteractiveCommands(ctx, cmds, promptSuffixes, opts)
 	if err != nil {
 		// 即使出错（如上下文超时），客户端也会返回部分结果；继续写入
 		for _, cr := range results {
-			if cr == nil { continue }
+			if cr == nil {
+				continue
+			}
 			logs = append(logs, CommandResult{
-				Command: strings.TrimSpace(cr.Command),
-				Output:  cr.Output,
-				Error:   cr.Error,
-				Elapsed: cr.Duration.String(),
+				Command:  strings.TrimSpace(cr.Command),
+				Output:   cr.Output,
+				Error:    cr.Error,
+				Elapsed:  cr.Duration.String(),
 				ExitCode: cr.ExitCode,
 			})
 		}
@@ -503,12 +572,14 @@ func (s *DeployService) runCommandsDetailed(ctx context.Context, cli *ssh.Client
 		return logs
 	}
 	for _, cr := range results {
-		if cr == nil { continue }
+		if cr == nil {
+			continue
+		}
 		logs = append(logs, CommandResult{
-			Command: strings.TrimSpace(cr.Command),
-			Output:  cr.Output,
-			Error:   cr.Error,
-			Elapsed: cr.Duration.String(),
+			Command:  strings.TrimSpace(cr.Command),
+			Output:   cr.Output,
+			Error:    cr.Error,
+			Elapsed:  cr.Duration.String(),
 			ExitCode: cr.ExitCode,
 		})
 	}
@@ -516,6 +587,7 @@ func (s *DeployService) runCommandsDetailed(ctx context.Context, cli *ssh.Client
 }
 
 // 新增：根据逐条日志聚合输出（不重复执行命令）
+// 按照 command + output 交替的格式进行聚合
 func (s *DeployService) aggregateDeployLogs(cmds []string, logs []CommandResult) CommandResult {
 	agg := CommandResult{Command: "", Output: "", Error: "", Elapsed: "", ExitCode: 0}
 	if len(cmds) > 0 {
@@ -524,6 +596,7 @@ func (s *DeployService) aggregateDeployLogs(cmds []string, logs []CommandResult)
 	var dur time.Duration
 	var outSB strings.Builder
 	var errSB strings.Builder
+	
 	for _, cr := range logs {
 		// 跳过内部错误记录项
 		if strings.TrimSpace(cr.Command) == "__deploy__" {
@@ -532,24 +605,38 @@ func (s *DeployService) aggregateDeployLogs(cmds []string, logs []CommandResult)
 			}
 			continue
 		}
+		
+		// 按照 command + output 的格式进行聚合
+		// line1: command
+		// line2: command-output
+		if strings.TrimSpace(cr.Command) != "" {
+			outSB.WriteString(strings.TrimSpace(cr.Command))
+			outSB.WriteString("\n")
+		}
+		
 		if strings.TrimSpace(cr.Output) != "" {
 			outSB.WriteString(cr.Output)
 			if !strings.HasSuffix(cr.Output, "\n") {
 				outSB.WriteString("\n")
 			}
 		}
+		
+		// 收集错误信息
 		if strings.TrimSpace(cr.Error) != "" {
 			errSB.WriteString(cr.Error)
 			if !strings.HasSuffix(cr.Error, "\n") {
 				errSB.WriteString("\n")
 			}
 		}
+		
+		// 累计执行时间
 		if strings.TrimSpace(cr.Elapsed) != "" {
 			if d, e := time.ParseDuration(cr.Elapsed); e == nil {
 				dur += d
 			}
 		}
 	}
+	
 	agg.Output = outSB.String()
 	if agg.Error == "" && errSB.Len() > 0 {
 		agg.Error = strings.TrimSuffix(errSB.String(), "\n")

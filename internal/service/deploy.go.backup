@@ -1,0 +1,409 @@
+package service
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
+)
+
+// DeployService 提供设备配置快速下发与状态采集能力
+type DeployService struct {
+	cfg       *config.Config
+	collector *CollectorService
+	sshPool   *ssh.Pool
+}
+
+func NewDeployService(cfg *config.Config, collector *CollectorService) *DeployService {
+	return &DeployService{cfg: cfg, collector: collector, sshPool: collector.sshPool}
+}
+
+func (s *DeployService) Start(ctx context.Context) error {
+	// 输出配置下发服务启动信息与关键 SSH 参数，便于现场定位
+	if s == nil || s.cfg == nil {
+		logger.Info("Deploy service started")
+		return nil
+	}
+	logger.Info(
+		"Deploy service started",
+		"ssh_timeout_all", s.cfg.SSH.Timeout,
+		"ssh_connect_timeout", s.cfg.SSH.ConnectTimeout,
+		"ssh_keep_alive_interval", s.cfg.SSH.KeepAliveInterval,
+		"ssh_max_sessions", s.cfg.SSH.MaxSessions,
+		"deploy_wait_ms", s.cfg.Deploy.DeployWaitMS,
+	)
+	return nil
+}
+func (s *DeployService) Stop() error {
+	logger.Info("Deploy service stopped")
+	return nil
+}
+
+// DeployFastRequest 通用请求
+type DeployFastRequest struct {
+	TaskID            string         `json:"task_id"`
+	TaskName          string         `json:"task_name"`
+	RetryFlag         int            `json:"retry_flag"`
+	TaskType          string         `json:"task_type"` // exec/dry_run
+	TaskTimeout       int            `json:"task_timeout"`
+	StatusCheckEnable int            `json:"status_check_enable"` // 1 开启/0 关闭
+	Devices           []DeployDevice `json:"devices"`
+}
+
+// DeployDevice 单设备参数
+type DeployDevice struct {
+	DeviceIP        string  `json:"device_ip"`
+	DeviceName      string  `json:"device_name"`
+	DevicePlatform  string  `json:"device_platform"`
+	DevicePort      int     `json:"device_port"`
+	CollectProtocol string  `json:"collect_protocol"`
+	UserName        string  `json:"user_name"`
+	Password        string  `json:"password"`
+	EnablePassword  string  `json:"enable_password"`
+	CliList         []string `json:"cli_list"`
+	StatusCheckList []string `json:"status_check_list"`
+	ConfigDeploy    string  `json:"config_deploy"`
+	DeviceTimeout   *int    `json:"device_timeout,omitempty"`
+}
+
+// DeployFastResponse 响应
+type DeployFastResponse struct {
+	TaskID   string               `json:"task_id"`
+	TaskName string               `json:"task_name"`
+	Results  []DeployDeviceResult `json:"results"`
+	Duration string               `json:"duration"`
+}
+
+// 单设备结果
+type DeployDeviceResult struct {
+	DeviceIP           string            `json:"device_ip"`
+	DeviceName         string            `json:"device_name"`
+	DevicePlatform     string            `json:"device_platform"`
+	DeviceStatusBefore map[string]string `json:"device_status_before,omitempty"`
+	DeviceStatusAfter  map[string]string `json:"device_status_after,omitempty"`
+	DeployLogExec      []CommandResult   `json:"deploy_log_exec"`
+	DeployLogsAggregated []CommandResult `json:"deploy_logs_aggregated,omitempty"`
+	Error              string            `json:"error,omitempty"`
+}
+
+func canonical(cmd string) string {
+	s := strings.TrimSpace(cmd)
+	if s == "" { return s }
+	// 常见清理：压缩空白与小写化，利于匹配过滤
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	return strings.ToLower(s)
+}
+
+
+// 读取平台默认配置（设备默认）
+func (s *DeployService) getDefaults(platform string) (config.PlatformDefaultsConfig, bool) {
+	p := strings.TrimSpace(strings.ToLower(platform))
+	if p == "" { p = "default" }
+	// 优先精确匹配
+	if s.cfg != nil && s.cfg.Collector.DeviceDefaults != nil {
+		if dd, ok := s.cfg.Collector.DeviceDefaults[p]; ok {
+			return dd, true
+		}
+		// 前缀兜底：当 key 为平台前缀时也可匹配（如 huawei、h3c、cisco_ios、linux）
+		for key, v := range s.cfg.Collector.DeviceDefaults {
+			kk := strings.TrimSpace(strings.ToLower(key))
+			if kk == "" { continue }
+			if strings.HasPrefix(p, kk) {
+				return v, true
+			}
+		}
+	}
+	return config.PlatformDefaultsConfig{}, false
+}
+
+// Deploy 执行下发
+func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*DeployFastResponse, error) {
+	start := time.Now()
+	resp := &DeployFastResponse{TaskID: req.TaskID, TaskName: req.TaskName, Results: make([]DeployDeviceResult, 0, len(req.Devices))}
+	statusEnable := req.StatusCheckEnable
+
+	// 设备循环
+	for _, d := range req.Devices {
+		r := DeployDeviceResult{DeviceIP: d.DeviceIP, DeviceName: d.DeviceName, DevicePlatform: d.DevicePlatform, DeviceStatusBefore: map[string]string{}, DeviceStatusAfter: map[string]string{}}
+
+		// 计算有效超时：优先设备级，其次任务级，再次全局，最后回退 15s
+		effTimeout := req.TaskTimeout
+		if effTimeout <= 0 {
+			if s.cfg != nil && s.cfg.SSH.Timeout > 0 { effTimeout = int(s.cfg.SSH.Timeout.Seconds()) } else { effTimeout = 15 }
+		}
+		devTimeout := effTimeout
+		if d.DeviceTimeout != nil && *d.DeviceTimeout > 0 { devTimeout = *d.DeviceTimeout }
+		sshTimeout := time.Duration(devTimeout) * time.Second
+		// 步骤控制标志与执行间隔
+		needsStatus := (statusEnable == 1) && (len(d.StatusCheckList) > 0) && (s.collector != nil)
+		doDeploy := strings.EqualFold(strings.TrimSpace(req.TaskType), "exec")
+		wait := s.cfg.Deploy.DeployWaitMS
+		if wait <= 0 {
+			wait = 2000
+		}
+
+		// 采集前状态：改为调用 CollectorService
+		if needsStatus {
+			cTimeout := req.TaskTimeout
+			if cTimeout <= 0 {
+				// 使用全局 ssh.timeout.timeout_all 作为默认值（秒），回退 15s
+				if s.cfg != nil && s.cfg.SSH.Timeout > 0 {
+					cTimeout = int(s.cfg.SSH.Timeout.Seconds())
+				} else {
+					cTimeout = 15
+				}
+			}
+			rf := req.RetryFlag
+			creq := &CollectRequest{
+				TaskID:          req.TaskID + "-pre-" + d.DeviceIP,
+				TaskName:        req.TaskName,
+				CollectOrigin:   "customer",
+				DeviceIP:        d.DeviceIP,
+				DeviceName:      d.DeviceName,
+				DevicePlatform:  d.DevicePlatform,
+				CollectProtocol: "ssh",
+				Port:            d.DevicePort,
+				UserName:        d.UserName,
+				Password:        d.Password,
+				EnablePassword:  d.EnablePassword,
+				CliList:         d.StatusCheckList,
+				RetryFlag:       &rf,
+				TaskTimeout:     &cTimeout,
+				DeviceTimeout:   d.DeviceTimeout,
+				Metadata:        map[string]interface{}{"collect_mode": "customer"},
+			}
+			if cresp, err := s.collector.ExecuteTask(ctx, creq); err == nil && cresp != nil {
+				for _, v := range cresp.Results {
+					if v == nil {
+						continue
+					}
+					cmd := strings.TrimSpace(v.Command)
+					r.DeviceStatusBefore[cmd] = v.RawOutput
+				}
+			}
+			// 步骤间隔：采集前与后续步骤之间
+			time.Sleep(time.Duration(wait) * time.Millisecond)
+		}
+
+		// 配置下发阶段：仅当 task_type=exec 执行
+		if doDeploy {
+			// 建立设备连接并准备交互选项
+			if s.sshPool == nil {
+				r.Error = "ssh pool not initialized"
+				resp.Results = append(resp.Results, r)
+				continue
+			}
+			info := &ssh.ConnectionInfo{
+				Host:     d.DeviceIP,
+				Port:     d.DevicePort,
+				Username: d.UserName,
+				Password: d.Password,
+			}
+			connCtx, cancel := context.WithTimeout(ctx, sshTimeout)
+			cli, err := s.sshPool.GetConnection(connCtx, info)
+			cancel()
+			if err != nil {
+				r.Error = "connect failed: " + err.Error()
+				resp.Results = append(resp.Results, r)
+				continue
+			}
+			// 平台交互默认与节奏
+			p := s.getPlatformInteract(d.DevicePlatform)
+			cmdInterval := p.CommandIntervalMS
+			if cmdInterval <= 0 {
+				cmdInterval = 120
+			}
+			opts := &ssh.InteractiveOptions{
+				EnablePassword:            strings.TrimSpace(d.EnablePassword),
+				LoginPassword:             strings.TrimSpace(d.Password),
+				EnableCLI:                 p.EnableCLI,
+				EnableExpectOutput:        p.EnableExceptOutput,
+				ExitCommands:              []string{"exit"},
+				CommandIntervalMS:         cmdInterval,
+				AutoInteractions:          p.AutoInteractions,
+				SkipDelayedEcho:           p.SkipDelayedEcho,
+				PerCommandTimeoutSec:      p.CommandTimeoutSec,
+				QuietAfterMS:              p.QuietAfterMS,
+				QuietPollIntervalMS:       p.QuietPollIntervalMS,
+				EnablePasswordFallbackMS:  p.EnablePasswordFallbackMS,
+				PromptInducerIntervalMS:   p.PromptInducerIntervalMS,
+				PromptInducerMaxCount:     p.PromptInducerMaxCount,
+				ExitPauseMS:               p.ExitPauseMS,
+				// 新增：用于精确提示符判定
+				DeviceName:                strings.TrimSpace(d.DeviceName),
+				// 新增：设备平台用于区分不同平台的处理逻辑
+				DevicePlatform:            strings.TrimSpace(d.DevicePlatform),
+				PromptSuffixes:            p.PromptSuffixes,
+			}
+			// 用户下发序列（预命令 + 进入配置模式 + 用户命令 + 退出配置模式）
+			pre := s.getPreCommands(d.DevicePlatform)
+			configEnter := s.getConfigModeCmds(d.DevicePlatform)
+			exitCmd := s.getConfigExitCmd(d.DevicePlatform)
+			// 将 config_deploy 兼容为用户命令列表（当 cli_list 为空时）
+			userCmds := make([]string, 0, len(d.CliList))
+			for _, c := range d.CliList {
+				if t := strings.TrimSpace(c); t != "" {
+					userCmds = append(userCmds, t)
+				}
+			}
+			if len(userCmds) == 0 && strings.TrimSpace(d.ConfigDeploy) != "" {
+				raw := strings.ReplaceAll(d.ConfigDeploy, "\r\n", "\n")
+				for _, ln := range strings.Split(raw, "\n") {
+					if t := strings.TrimSpace(ln); t != "" {
+						userCmds = append(userCmds, t)
+					}
+				}
+			}
+			// 保留原始用户命令（不进行规范化/映射）
+			// 条件退出配置模式：在 SSH 交互中根据提示符判定是否需要执行退出
+			opts.ConfigExitCLI = exitCmd
+			opts.ConfigExitConditional = true
+			deploySeq := append([]string{}, pre...)
+			deploySeq = append(deploySeq, configEnter...)
+			deploySeq = append(deploySeq, userCmds...)
+			// 保护：若用户已包含退出命令（如 end/quit），则不再附加平台退出命令
+			userHasExit := false
+			if strings.TrimSpace(exitCmd) != "" {
+				ce := canonical(exitCmd)
+				for _, u := range userCmds {
+					if canonical(u) == ce {
+						userHasExit = true
+						break
+					}
+				}
+			}
+			if !userHasExit && strings.TrimSpace(exitCmd) != "" {
+				deploySeq = append(deploySeq, exitCmd)
+			}
+
+			// 执行详细日志（逐条）
+			sessionLogs := s.runCommandsDetailed(ctx, cli, deploySeq, p.PromptSuffixes, opts)
+
+			// 新增：对于输出为空的命令，尝试读取设备当前模式作为输出
+			s.enhanceEmptyOutputWithDeviceMode(ctx, cli, sessionLogs, p.PromptSuffixes, opts)
+			if modeOutput != "" {
+			logs[i].Output = modeOutput
+			logger.Debugf("Enhanced empty output with device mode: %s -> %s", logs[i].Command, modeOutput)
+			}
+			}
+			}
+			}
+			
+			// extractDeviceModeSuffix 从提示符中提取设备模式后缀
+			// 例如：cisco-01(config)# -> (config)#
+			//      huawei-01[~HUAWEI-config]> -> [~HUAWEI-config]>
+			func (s *DeployService) extractDeviceModeSuffix(prompt string, opts *ssh.InteractiveOptions) string {
+			if strings.TrimSpace(prompt) == "" {
+			return ""
+			}
+			
+			// 如果有设备名，尝试提取设备名之后的部分作为模式后缀
+			if opts != nil && strings.TrimSpace(opts.DeviceName) != "" {
+			deviceName := strings.TrimSpace(opts.DeviceName)
+			// 查找设备名在提示符中的位置
+			if idx := strings.Index(strings.ToLower(prompt), strings.ToLower(deviceName)); idx >= 0 {
+			// 提取设备名之后的部分
+			suffix := strings.TrimSpace(prompt[idx+len(deviceName):])
+			if suffix != "" {
+			return suffix
+			}
+			}
+			}
+			
+			// 回退方案：查找常见的配置模式标识符
+			prompt = strings.TrimSpace(prompt)
+			
+			// 查找配置模式标识符
+			configPatterns := []string{
+			"(config)",
+			"(config-",
+			"[~",
+			"[*",
+			"[edit",
+			}
+			
+			for _, pattern := range configPatterns {
+			if idx := strings.Index(prompt, pattern); idx >= 0 {
+			// 返回从配置模式标识符开始到结尾的部分
+			return strings.TrimSpace(prompt[idx:])
+			}
+			}
+			
+			// 如果没有找到配置模式标识符，返回最后的提示符后缀
+			for _, suffix := range []string{"#", ">", "]", "$"} {
+			if strings.HasSuffix(prompt, suffix) {
+			// 尝试返回更多上下文，而不仅仅是后缀
+			parts := strings.Fields(prompt)
+			if len(parts) > 0 {
+			return parts[len(parts)-1]
+			}
+			return suffix
+			}
+			}
+			
+			return prompt
+			}
+
+			// 新增：根据逐条日志聚合输出（不重复执行命令）
+			func (s *DeployService) aggregateDeployLogs(cmds []string, logs []CommandResult) CommandResult {
+				agg := CommandResult{Command: "", Output: "", Error: "", Elapsed: "", ExitCode: 0}
+				if len(cmds) > 0 {
+					agg.Command = strings.Join(cmds, "\n") + "\n"
+				}
+				var dur time.Duration
+				var outSB strings.Builder
+				var errSB strings.Builder
+				for _, cr := range logs {
+					// 跳过内部错误记录项
+					if strings.TrimSpace(cr.Command) == "__deploy__" {
+						if strings.TrimSpace(cr.Error) != "" && agg.Error == "" {
+							agg.Error = strings.TrimSpace(cr.Error)
+						}
+						continue
+					}
+					if strings.TrimSpace(cr.Output) != "" {
+						outSB.WriteString(cr.Output)
+						if !strings.HasSuffix(cr.Output, "\n") {
+							outSB.WriteString("\n")
+						}
+					}
+					if strings.TrimSpace(cr.Error) != "" {
+						errSB.WriteString(cr.Error)
+						if !strings.HasSuffix(cr.Error, "\n") {
+							errSB.WriteString("\n")
+						}
+					}
+					if strings.TrimSpace(cr.Elapsed) != "" {
+						if d, e := time.ParseDuration(cr.Elapsed); e == nil {
+							dur += d
+						}
+					}
+				}
+				agg.Output = outSB.String()
+				if agg.Error == "" && errSB.Len() > 0 {
+					agg.Error = strings.TrimSuffix(errSB.String(), "\n")
+				}
+				if dur > 0 {
+					agg.Elapsed = dur.String()
+				}
+				return agg
+			}
+
+			// 兼容旧接口：保留 ExecuteFast，内部转发到 Deploy
+			func (s *DeployService) ExecuteFast(ctx context.Context, req *DeployFastRequest) (*DeployFastResponse, error) {
+				return s.Deploy(ctx, req)
+			}
+
+			// CommandResult 记录每条命令执行的输出
+			type CommandResult struct {
+				Command  string `json:"command"`
+				Output   string `json:"output"`
+				Error    string `json:"error"`
+				Elapsed  string `json:"elapsed"`
+				ExitCode int    `json:"exit_code"`
+			}
