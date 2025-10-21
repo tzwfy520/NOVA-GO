@@ -72,6 +72,10 @@ deploy/
 *.config.yaml
 *.dev.yaml
 *.prod.yaml
-binaryfile/
+# binaryfile/
 # Data
 data/
+
+# zipfile
+.tar.gz
+.tar

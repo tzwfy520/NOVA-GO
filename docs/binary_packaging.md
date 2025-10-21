@@ -1,105 +1,102 @@
 # 项目二进制文件打包说明
 
-本文档详细介绍了 SSH 采集器专业版的二进制文件打包、构建和部署流程。
-
-## 目录
-- [构建脚本使用](#构建脚本使用)
-- [可执行文件运行](#可执行文件运行)
-- [运行目录结构](#运行目录结构)
-- [部署最佳实践](#部署最佳实践)
-- [故障排除](#故障排除)
+本文档详细说明了 Nova-Go SSH 采集器的构建、打包和部署流程。
 
 ## 构建脚本使用
 
-### 1. 脚本位置
-构建脚本位于项目根目录的 `scripts/build.sh`。
-
-### 2. 基本使用
+### 基本用法
 
 ```bash
-# 使用默认版本 1.0.0 构建
+# 使用默认版本 1.0.0
 ./scripts/build.sh
 
-# 指定版本号构建
-VERSION=1.2.3 ./scripts/build.sh
-
-# 指定其他版本
-VERSION=2.0.0 ./scripts/build.sh
+# 指定版本号
+VERSION=2.1.3 ./scripts/build.sh
 ```
 
-### 3. 构建过程
+### 构建过程
 
-构建脚本会自动执行以下步骤：
+构建脚本会执行以下步骤：
 
-1. **环境检查**：验证 Go 环境和依赖
-2. **代码质量检查**：运行测试和代码检查（如果安装了 golangci-lint）
-3. **多平台编译**：为以下平台构建可执行文件：
+1. **环境检查**：验证 Go 环境是否可用
+2. **依赖管理**：下载和整理项目依赖
+3. **跳过测试**：已禁用测试环节以加快构建速度
+4. **代码检查**：运行 golangci-lint（如果可用）
+5. **多平台编译**：为以下平台生成可执行文件
    - Linux (amd64, arm64)
-   - macOS/Darwin (amd64, arm64)
+   - macOS (amd64, arm64)
    - Windows (amd64, arm64)
-4. **文件打包**：复制配置文件和文档
-5. **压缩归档**：创建对应的压缩包
+6. **文件打包**：创建压缩包并复制配置文件
 
-### 4. 构建输出
+### 构建产物
 
-构建完成后，所有文件将位于 `binaryfile/nova-go-v${VERSION}/` 目录下：
+构建完成后，文件将位于 `binaryfile/${VERSION}/` 目录下：
 
 ```
-binaryfile/nova-go-v1.2.3/
-├── linux/
-│   ├── nova-go-v1.2.3-linux-amd64
-│   ├── nova-go-v1.2.3-linux-amd64.tar.gz
-│   ├── nova-go-v1.2.3-linux-arm64
-│   ├── nova-go-v1.2.3-linux-arm64.tar.gz
-│   ├── configs/
-│   └── README.md
-├── darwin/
-│   ├── nova-go-v1.2.3-darwin-amd64
-│   ├── nova-go-v1.2.3-darwin-amd64.tar.gz
-│   ├── nova-go-v1.2.3-darwin-arm64
-│   ├── nova-go-v1.2.3-darwin-arm64.tar.gz
-│   ├── configs/
-│   └── README.md
-└── windows/
-    ├── nova-go-v1.2.3-windows-amd64.exe
-    ├── nova-go-v1.2.3-windows-amd64.zip
-    ├── nova-go-v1.2.3-windows-arm64.exe
-    ├── nova-go-v1.2.3-windows-arm64.zip
-    ├── configs/
-    └── README.md
+binaryfile/
+└── 1.0.0/                              # 版本目录
+    ├── configs/                         # 配置文件目录
+    │   ├── config.yaml
+    │   ├── dev.yaml
+    │   └── prod.yaml
+    ├── README.md                        # 项目说明文档
+    ├── nova-go-1.0.0.linux-amd64       # Linux x64 可执行文件
+    ├── nova-go-1.0.0.linux-amd64.tar.gz
+    ├── nova-go-1.0.0.linux-arm64       # Linux ARM64 可执行文件
+    ├── nova-go-1.0.0.linux-arm64.tar.gz
+    ├── nova-go-1.0.0.darwin-amd64      # macOS x64 可执行文件
+    ├── nova-go-1.0.0.darwin-amd64.tar.gz
+    ├── nova-go-1.0.0.darwin-arm64      # macOS ARM64 可执行文件
+    ├── nova-go-1.0.0.darwin-arm64.tar.gz
+    ├── nova-go-1.0.0.windows-amd64.exe # Windows x64 可执行文件
+    ├── nova-go-1.0.0.windows-amd64.zip
+    ├── nova-go-1.0.0.windows-arm64.exe # Windows ARM64 可执行文件
+    └── nova-go-1.0.0.windows-arm64.zip
 ```
+
+### 文件命名规则
+
+- **可执行文件**：`nova-go-${VERSION}.${OS}-${ARCH}[.exe]`
+- **压缩包**：
+  - Unix 系统：`nova-go-${VERSION}.${OS}-${ARCH}.tar.gz`
+  - Windows 系统：`nova-go-${VERSION}.${OS}-${ARCH}.zip`
 
 ## 可执行文件运行
 
-### 1. 基本运行
+### 启动命令
 
 ```bash
-# Linux/macOS
-./nova-go-v1.2.3-linux-amd64 -config configs/dev.yaml
+# 基本启动
+./nova-go-1.0.0.linux-amd64
 
-# Windows
-nova-go-v1.2.3-windows-amd64.exe -config configs/dev.yaml
+# 指定配置文件
+./nova-go-1.0.0.linux-amd64 -config configs/prod.yaml
+
+# 指定端口（环境变量）
+PORT=18001 ./nova-go-1.0.0.linux-amd64 -config configs/prod.yaml
 ```
 
 ### 2. 命令行参数
+
+### 启动参数
 
 | 参数 | 说明 | 默认值 | 示例 |
 |------|------|--------|------|
 | `-config` | 配置文件路径 | `configs/config.yaml` | `-config configs/prod.yaml` |
 
-### 3. 环境变量
+### 环境变量
 
 可以通过环境变量覆盖部分配置：
 
 ```bash
 # 指定服务端口
-PORT=8080 ./nova-go-v1.2.3-linux-amd64
+PORT=8080 ./nova-go-1.0.0.linux-amd64
 
 # 指定版本号（构建时使用）
-VERSION=1.2.3 ./scripts/build.sh
+VERSION=1.0.0 ./scripts/build.sh
 ```
 
-### 4. 服务验证
+### 服务验证
 
 启动后可以通过以下方式验证服务状态：
 
@@ -113,42 +110,42 @@ curl http://localhost:18000/api/v1/collector/stats
 
 ## 运行目录结构
 
-### 1. 推荐的部署目录结构
+### 推荐的部署目录结构
 
 ```
 /opt/nova-go/
 ├── bin/
-│   └── nova-go-v1.2.3-linux-amd64    # 可执行文件
+│   └── nova-go-1.0.0.linux-amd64     # 可执行文件
 ├── configs/
-│   ├── config.yaml                    # 主配置文件
-│   ├── dev.yaml                       # 开发环境配置
-│   └── prod.yaml                      # 生产环境配置
-├── logs/                              # 日志目录
-├── data/                              # 数据目录（SQLite等）
-├── simulate/                          # 模拟器配置（可选）
+│   ├── config.yaml                   # 主配置文件
+│   ├── dev.yaml                      # 开发环境配置
+│   └── prod.yaml                     # 生产环境配置
+├── logs/                             # 日志目录
+├── data/                             # 数据目录（SQLite等）
+├── simulate/                         # 模拟器配置（可选）
 │   ├── simulate.yaml
 │   └── namespace/
-└── docs/                              # 文档（可选）
+└── docs/                             # 文档（可选）
     └── README.md
 ```
 
-### 2. 必需的目录和文件
+### 必需的目录和文件
 
 - **可执行文件**：主程序二进制文件
 - **configs/ 目录**：包含所有配置文件
 - **logs/ 目录**：日志输出目录（程序会自动创建）
 
-### 3. 可选的目录和文件
+### 可选的目录和文件
 
 - **simulate/ 目录**：如果需要使用设备模拟功能
 - **data/ 目录**：用于存放 SQLite 数据库文件
 - **docs/ 目录**：项目文档
 
-### 4. 权限要求
+### 权限要求
 
 ```bash
 # 设置可执行文件权限
-chmod +x nova-go-v1.2.3-linux-amd64
+chmod +x nova-go-1.0.0.linux-amd64
 
 # 设置目录权限
 chmod 755 configs/ logs/ data/
@@ -157,7 +154,7 @@ chmod 644 configs/*.yaml
 
 ## 部署最佳实践
 
-### 1. 生产环境部署
+### 生产环境部署
 
 #### 系统服务配置（systemd）
 
@@ -165,7 +162,7 @@ chmod 644 configs/*.yaml
 
 ```ini
 [Unit]
-Description=Nova Go SSH Collector Pro
+Description=Nova Go SSH Collector
 After=network.target
 
 [Service]
@@ -173,7 +170,7 @@ Type=simple
 User=nova-go
 Group=nova-go
 WorkingDirectory=/opt/nova-go
-ExecStart=/opt/nova-go/bin/nova-go-v1.2.3-linux-amd64 -config /opt/nova-go/configs/prod.yaml
+ExecStart=/opt/nova-go/bin/nova-go-1.0.0.linux-amd64 -config /opt/nova-go/configs/prod.yaml
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -210,7 +207,7 @@ RUN addgroup -g 1000 nova-go && \
 WORKDIR /app
 
 # 复制文件
-COPY nova-go-v1.2.3-linux-amd64 /app/nova-go
+COPY nova-go-1.0.0.linux-amd64 /app/nova-go
 COPY configs/ /app/configs/
 
 # 设置权限

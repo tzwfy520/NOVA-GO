@@ -35,10 +35,10 @@
 ### 1. 本地开发
 ```bash
 # 构建开发版本
-go build -o dist/sshcollector ./cmd/server
+go build -o dist/nova-go ./cmd/server
 
 # 启动服务
-./dist/sshcollector -config configs/dev.yaml
+./dist/nova-go -config configs/dev.yaml
 
 # 健康检查
 curl http://localhost:18000/health
@@ -47,17 +47,18 @@ curl http://localhost:18000/health
 ### 2. 生产构建
 ```bash
 # 使用构建脚本（推荐）
-VERSION=1.2.3 ./scripts/build.sh
+VERSION=1.0.0 ./scripts/build.sh
 
-# 构建产物位于 binaryfile/nova-go-v1.2.3/
+# 构建产物位于 binaryfile/1.0.0/
 # 包含 Linux、macOS、Windows 多平台可执行文件
+# 文件格式：nova-go-1.0.0.{platform}-{arch}[.exe]
 ```
 
 ### 3. 目录约定
 - 配置：`configs/dev.yaml | prod.yaml`
 - 日志：`logs/`
 - 模拟：`simulate/`（含 `simulate.yaml` 与命令文件目录）
-- 构建产物：`binaryfile/nova-go-v${VERSION}/`
+- 构建产物：`binaryfile/${VERSION}/`
 
 ## 配置要点
 - 并发档位（推荐）：在 `configs/*.yaml` 中为不同机器规格设置安全并发

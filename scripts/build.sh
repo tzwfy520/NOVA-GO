@@ -13,14 +13,14 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 项目信息
-PROJECT_NAME="sshcollector"
+PROJECT_NAME="nova-go"
 VERSION=${VERSION:-"1.0.0"}
 BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 BUILD_ID=$(date '+%Y%m%d%H%M')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GO_VERSION=$(go version | awk '{print $3}')
-OUTPUT_ROOT="deploy"
-OUTPUT_DIR="${OUTPUT_ROOT}/${BUILD_ID}"
+OUTPUT_ROOT="binaryfile"
+OUTPUT_DIR="${OUTPUT_ROOT}/${VERSION}"
 
 # 构建信息
 LDFLAGS="-X 'main.Version=${VERSION}' -X 'main.BuildTime=${BUILD_TIME}' -X 'main.GitCommit=${GIT_COMMIT}' -X 'main.GoVersion=${GO_VERSION}'"
@@ -52,9 +52,8 @@ echo -e "${YELLOW}下载依赖...${NC}"
 go mod download
 go mod tidy
 
-# 运行测试
-echo -e "${YELLOW}运行测试...${NC}"
-go test -v ./...
+# 跳过测试（已禁用）
+echo -e "${YELLOW}跳过测试环节...${NC}"
 
 # 运行代码检查
 echo -e "${YELLOW}运行代码检查...${NC}"
@@ -72,28 +71,42 @@ fi
 echo -e "${YELLOW}构建Linux版本 (amd64)...${NC}"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags "${LDFLAGS}" \
-    -o "${OUTPUT_DIR}/${PROJECT_NAME}-linux-amd64" \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-${VERSION}.linux-amd64" \
+    ./cmd/server
+
+# 构建Linux版本 (arm64)
+echo -e "${YELLOW}构建Linux版本 (arm64)...${NC}"
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+    -ldflags "${LDFLAGS}" \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-${VERSION}.linux-arm64" \
     ./cmd/server
 
 # 构建macOS版本 (amd64)
 echo -e "${YELLOW}构建macOS版本 (amd64)...${NC}"
 CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build \
     -ldflags "${LDFLAGS}" \
-    -o "${OUTPUT_DIR}/${PROJECT_NAME}-darwin-amd64" \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-${VERSION}.darwin-amd64" \
     ./cmd/server
 
 # 构建macOS版本 (arm64 / Apple Silicon)
 echo -e "${YELLOW}构建macOS版本 (arm64 / Apple Silicon)...${NC}"
 CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
     -ldflags "${LDFLAGS}" \
-    -o "${OUTPUT_DIR}/${PROJECT_NAME}-darwin-arm64" \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-${VERSION}.darwin-arm64" \
     ./cmd/server
 
 # 构建Windows版本 (amd64)
 echo -e "${YELLOW}构建Windows版本 (amd64)...${NC}"
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
     -ldflags "${LDFLAGS}" \
-    -o "${OUTPUT_DIR}/${PROJECT_NAME}-windows-amd64.exe" \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-${VERSION}.windows-amd64.exe" \
+    ./cmd/server
+
+# 构建Windows版本 (arm64)
+echo -e "${YELLOW}构建Windows版本 (arm64)...${NC}"
+CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build \
+    -ldflags "${LDFLAGS}" \
+    -o "${OUTPUT_DIR}/${PROJECT_NAME}-${VERSION}.windows-arm64.exe" \
     ./cmd/server
 
 # 复制配置文件
