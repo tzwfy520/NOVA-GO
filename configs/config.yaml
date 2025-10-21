@@ -65,7 +65,7 @@ collector:
       # 当需要提权时，设置提权命令与提示匹配
       # 示例：
       # enable_cli: "enable"            # 或 Linux: "sudo -i"
-      # except_output: "Password:"      # 接收到该输出后自动输入 enable 密码
+      # enable_except_output: "Password:"      # 接收到该输出后自动输入 enable 密码
       enable_cli: "enable"
       enable_except_output: "Password:"
       skip_delayed_echo: true
@@ -192,7 +192,7 @@ collector:
             command_auto_send: "y"
         error_hints:
           - "error:"
-          - "unrecognized command"
+          # - "unrecognized command"
         case_insensitive: true
         trim_space: true
     linux:
@@ -241,7 +241,7 @@ ssh:
   max_sessions: 100
   # 全局 SSH 超时与交互节奏配置
   timeout:
-    timeout_all: 60s         # 全局执行窗口, 包括所有阶段（拨号、认证、交互）
+    timeout_all: 60s         # 针对单台设备的全局执行窗口, 包括所有阶段（拨号、认证、交互）
     dial_timeout: 2          # 拨号/握手阶段超时（原 connect_timeout 拆分）
     auth_timeout: 5          # 认证阶段超时（原 connect_timeout 拆分）
     interact_timeout:

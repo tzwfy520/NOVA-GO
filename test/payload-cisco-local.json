@@ -1,0 +1,23 @@
+{
+  "task_id": "T-2001-3",
+  "task_name": "custom-batch-cisco-local",
+  "retry_flag": 0,
+  "timeout": 30,
+  "cli_list": [
+    "terminal length 0",
+    "show version",
+    "show running-config"
+  ],
+  "devices": [
+    {
+      "device_ip": "127.0.0.1",
+      "device_port": 22001,
+      "device_name": "cisco-01",
+      "device_platform": "cisco_ios",
+      "collect_protocol": "ssh",
+      "user_name": "cisco-01",
+      "password": "nova",
+      "enable_password": "nova"
+    }
+  ]
+}

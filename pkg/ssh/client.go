@@ -65,6 +65,8 @@ type InteractiveOptions struct {
 	SkipDelayedEcho   bool
 	// 新增：设备名用于提示符判定（用户/配置模式）
 	DeviceName string
+	// 新增：设备平台用于区分不同平台的处理逻辑
+	DevicePlatform string
 	// 以下字段在交互控制中已被使用，需要在结构体中声明
 	// 提权与自动交互
 	EnableCLI          string
@@ -338,6 +340,10 @@ func (c *Client) ExecuteCommand(ctx context.Context, command string) (*CommandRe
 	case <-done:
 		result.Duration = time.Since(startTime)
 		result.Output = util.EnsureUTF8Bytes(output)
+		
+		// Debug日志：记录命令回显的head/tail-lines
+		logger.DebugCommandOutput(command, result.Output, 5)
+		
 		if cmdErr != nil {
 			result.Error = cmdErr.Error()
 			if exitError, ok := cmdErr.(*ssh.ExitError); ok {
@@ -833,13 +839,16 @@ StartCommands:
 		if opts != nil && opts.ConfigExitConditional && opts.ConfigExitCLI != "" && eq(cmd, opts.ConfigExitCLI) {
 			// 判定是否已经不在配置模式，若是则跳过发送退出配置命令
 			if lastPromptLine != "" && !isConfigPromptLine(lastPromptLine) {
-				results = append(results, &CommandResult{
+				result := &CommandResult{
 					Command:  cmd,
 					Output:   "",
 					Error:    "",
 					ExitCode: 0,
 					Duration: 0,
-				})
+				}
+				results = append(results, result)
+				// 添加debug日志，记录设备回显信息
+				logger.DebugCommandOutput(cmd, result.Output, 5)
 				// 对齐后续节奏：记录上一条命令并应用命令间隔
 				prevCmd = cmd
 				if opts != nil && opts.CommandIntervalMS > 0 {
@@ -915,8 +924,21 @@ StartCommands:
 			c := strings.ToLower(strings.TrimSpace(curr))
 			return strings.HasPrefix(c, "show run") || strings.HasPrefix(c, "show running-config")
 		}
+		// 判断是否为Linux平台的sudo命令
+		isLinuxSudoCmd := func(curr string) bool {
+			if opts == nil || opts.DevicePlatform == "" {
+				return false
+			}
+			platform := strings.ToLower(strings.TrimSpace(opts.DevicePlatform))
+			if platform != "linux" {
+				return false
+			}
+			// 检查是否为sudo相关的提权命令
+			return isEnableCmd(curr) && strings.Contains(strings.ToLower(strings.TrimSpace(opts.EnableCLI)), "sudo")
+		}
 		// 禁用提权命令的静默完成，防止在等待密码/进入特权时提前结束
-		quietCompleteAllowed := !(isLongOutputCmd(cmd) || isEnableCmd(cmd))
+		// 对于Linux平台的sudo命令，也禁用3秒无输出检测，因为sudo可能需要更长时间等待密码输入
+		quietCompleteAllowed := !(isLongOutputCmd(cmd) || isEnableCmd(cmd) || isLinuxSudoCmd(cmd))
 		// 静默检测轮询间隔（可调）
 		quietPoll := 250 * time.Millisecond
 		if opts != nil && opts.QuietPollIntervalMS > 0 {
@@ -933,13 +955,16 @@ StartCommands:
 				stdin.Close()
 				session.Close()
 				logger.Debug("SSH Interactive: ctx canceled; returning partial results")
-				results = append(results, &CommandResult{
+				result := &CommandResult{
 					Command:  cmd,
 					Output:   util.EnsureUTF8(out.String()),
 					Error:    ctx.Err().Error(),
 					ExitCode: -1,
 					Duration: time.Since(cmdStart),
-				})
+				}
+				results = append(results, result)
+				// 添加debug日志，记录设备回显信息
+				logger.DebugCommandOutput(cmd, result.Output, 5)
 				// 返回上层错误以触发服务层的非交互回退逻辑，避免只返回预命令导致结果为空
 				return results, ctx.Err()
 			case line := <-lineCh:
@@ -1008,14 +1033,19 @@ StartCommands:
 							logger.Warnf("Enable not privileged; prompt_line=%q", trimmedPrompt)
 							exitCode = -2
 						}
+						// enable命令完成后增加额外等待时间，确保设备状态稳定
+						time.Sleep(500 * time.Millisecond)
 					}
-					results = append(results, &CommandResult{
+					result := &CommandResult{
 						Command:  cmd,
 						Output:   util.EnsureUTF8(out.String()),
 						Error:    errStr,
 						ExitCode: exitCode,
 						Duration: time.Since(cmdStart),
-					})
+					}
+					results = append(results, result)
+					// 添加debug日志，记录设备回显信息
+					logger.DebugCommandOutput(cmd, result.Output, 5)
 					goto NextCmd
 				}
 
@@ -1040,7 +1070,7 @@ StartCommands:
 					}
 					prevIsEnable = strings.EqualFold(strings.TrimSpace(prevCmd), ecli)
 				}
-				if opts != nil && opts.EnablePassword != "" && (isEnableCmd(cmd) || prevIsEnable) {
+				if opts != nil && opts.EnablePassword != "" && (isEnableCmd(cmd) || prevIsEnable) && !enableFallbackSent && !enableDone {
 					// 优先根据配置的 EnableExpectOutput 进行匹配（大小写不敏感，包含匹配）
 					exp := strings.TrimSpace(opts.EnableExpectOutput)
 					if exp != "" {
@@ -1055,6 +1085,11 @@ StartCommands:
 							}
 							stdin.Write([]byte(pwdToSend + "\r\n"))
 							enableFallbackSent = true
+							// 标记提权完成并取消回退通道，避免密码被误当作下一条命令
+							enableDone = true
+							enableFallback = nil
+							// 密码发送后等待足够时间让设备处理，避免与下一条命令时序冲突
+							time.Sleep(300 * time.Millisecond)
 							// 不立即结束，继续等待提示符，以确保进入特权模式
 							continue
 						}
@@ -1071,6 +1106,11 @@ StartCommands:
 							}
 							stdin.Write([]byte(pwdToSend + "\r\n"))
 							enableFallbackSent = true
+							// 标记提权完成并取消回退通道，避免密码被误当作下一条命令
+							enableDone = true
+							enableFallback = nil
+							// 密码发送后等待足够时间让设备处理，避免与下一条命令时序冲突
+							time.Sleep(300 * time.Millisecond)
 							continue
 						}
 					}
@@ -1126,43 +1166,69 @@ StartCommands:
 					}
 					stdin.Write([]byte(pwdToSend + "\r\n"))
 					enableFallbackSent = true
-					// 继续等待提示符
-					continue
+					// 密码发送后等待足够时间让设备处理，避免与下一条命令时序冲突
+					time.Sleep(500 * time.Millisecond)
+					// 关键修复：设置enableDone为true，标记enable命令已完成
+					enableDone = true
+					enableFallback = nil
+					// 跳转到NextCmd处理下一个命令
+					goto NextCmd
 				}
 			// 静默完成检测：在已经读取到内容(sawContent)的情况下，如果持续一段时间未再收到输出，认为命令已完成
 			// 该逻辑可以避免因提示符识别失败导致的“总是等到整体超时”问题
 			case <-time.After(quietPoll):
-				if sawContent && time.Since(lastRecvAt) >= quietAfter {
+				// 修复：对于无输出命令（如terminal length 0），在命令启动后足够时间内未收到任何输出，也认为完成
+				timeSinceStart := time.Since(cmdStart)
+				timeSinceLastRecv := time.Since(lastRecvAt)
+				
+				// 条件1：有输出内容且静默时间足够 (原逻辑)
+				hasContentAndQuiet := sawContent && timeSinceLastRecv >= quietAfter
+				
+				// 条件2：无输出命令检测 - 命令启动后3秒内未收到任何输出，且不是长输出命令
+				// 特别排除Linux平台的sudo命令，因为sudo需要等待用户输入密码
+				isNoOutputCmd := !sawContent && timeSinceStart >= 3*time.Second && quietCompleteAllowed && !isLinuxSudoCmd(cmd)
+				
+				if hasContentAndQuiet || isNoOutputCmd {
 					// 针对长输出命令，禁止静默完成，避免在首行后短暂空档提前结束
 					if !quietCompleteAllowed {
 						continue
 					}
 					// 防止过早结束：若仅看到极少输出（如 Cisco "Building configuration..."），在命令启动后的前2秒内不触发静默完成
 					// 若输出行数已达到一定规模（>=3），则不受该限制
-					if time.Since(cmdStart) < 2*time.Second && outLineCount < 3 {
+					if hasContentAndQuiet && timeSinceStart < 2*time.Second && outLineCount < 3 {
 						continue
 					}
-					results = append(results, &CommandResult{
+					result := &CommandResult{
 						Command:  cmd,
 						Output:   util.EnsureUTF8(out.String()),
 						Error:    "",
 						ExitCode: 0,
 						Duration: time.Since(cmdStart),
-					})
-					logger.Debugf("SSH Interactive: quiet-complete reached (%.0fms): %s", quietAfter.Seconds()*1000, cmd)
+					}
+					results = append(results, result)
+					// 添加debug日志，记录设备回显信息
+					logger.DebugCommandOutput(cmd, result.Output, 5)
+					if isNoOutputCmd {
+						logger.Debugf("SSH Interactive: no-output command completed (%.0fms): %s", timeSinceStart.Seconds()*1000, cmd)
+					} else {
+						logger.Debugf("SSH Interactive: quiet-complete reached (%.0fms): %s", quietAfter.Seconds()*1000, cmd)
+					}
 					goto NextCmd
 				}
 				// 若未达到静默完成条件，继续等待
 				continue
 			case <-time.After(perCmdTimeout):
 				// 超时保护：将当前已读作为输出返回
-				results = append(results, &CommandResult{
+				result := &CommandResult{
 					Command:  cmd,
 					Output:   util.EnsureUTF8(out.String()),
 					Error:    "command timeout",
 					ExitCode: -1,
 					Duration: time.Since(cmdStart),
-				})
+				}
+				results = append(results, result)
+				// 添加debug日志，记录设备回显信息
+				logger.DebugCommandOutput(cmd, result.Output, 5)
 				logger.Debugf("SSH Interactive: per-command timeout reached (%s): %s", perCmdTimeout, cmd)
 				goto NextCmd
 			}

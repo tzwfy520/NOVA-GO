@@ -236,6 +236,8 @@ func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*De
 				ExitPauseMS:               p.ExitPauseMS,
 				// 新增：用于精确提示符判定
 				DeviceName:                strings.TrimSpace(d.DeviceName),
+				// 新增：设备平台用于区分不同平台的处理逻辑
+				DevicePlatform:            strings.TrimSpace(d.DevicePlatform),
 				PromptSuffixes:            p.PromptSuffixes,
 			}
 			// 用户下发序列（预命令 + 进入配置模式 + 用户命令 + 退出配置模式）
@@ -440,11 +442,18 @@ func (s *DeployService) getPlatformInteract(platform string) platformInteract {
 	return p
 }
 
-// 获取平台预命令：如关闭分页
+// 获取平台预命令：如enable、关闭分页
 func (s *DeployService) getPreCommands(platform string) []string {
 	cmds := []string{}
 	dd, ok := s.getDefaults(platform)
 	if !ok { return cmds }
+	
+	// 如果平台需要enable，先添加enable命令
+	if dd.EnableRequired && strings.TrimSpace(dd.EnableCLI) != "" {
+		cmds = append(cmds, strings.TrimSpace(dd.EnableCLI))
+	}
+	
+	// 添加关闭分页命令
 	for _, c := range dd.DisablePagingCmds {
 		t := strings.TrimSpace(c)
 		if t == "" { continue }

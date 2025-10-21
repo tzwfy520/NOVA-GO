@@ -37,7 +37,8 @@ func Init(config Config) error {
 	// 设置日志格式
 	if config.Format == "json" {
 		log.SetFormatter(&logrus.JSONFormatter{
-			TimestampFormat: "2006-01-02 15:04:05",
+			TimestampFormat:   "2006-01-02 15:04:05",
+			DisableHTMLEscape: true, // 禁用HTML转义，正确显示<>等字符
 		})
 	} else {
 		log.SetFormatter(&logrus.TextFormatter{

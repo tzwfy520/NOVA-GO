@@ -131,6 +131,8 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 	interactive := &ssh.InteractiveOptions{SkipDelayedEcho: defaults.SkipDelayedEcho}
 	// 新增：用于精确提示符判定
 	interactive.DeviceName = strings.TrimSpace(req.DeviceName)
+	// 新增：设备平台用于区分不同平台的处理逻辑
+	interactive.DevicePlatform = strings.TrimSpace(req.DevicePlatform)
 	interactive.PromptSuffixes = promptSuffixes
 	// enable 配置
 	p := strings.ToLower(strings.TrimSpace(req.DevicePlatform))
@@ -419,6 +421,8 @@ func (b *InteractBasic) EnterConfigMode(ctx context.Context, req *ExecRequest) (
     interactive := &ssh.InteractiveOptions{ SkipDelayedEcho: defaults.SkipDelayedEcho }
     // 新增：用于精确提示符判定
     interactive.DeviceName = strings.TrimSpace(req.DeviceName)
+    // 新增：设备平台用于区分不同平台的处理逻辑
+    interactive.DevicePlatform = strings.TrimSpace(req.DevicePlatform)
     interactive.PromptSuffixes = promptSuffixes
     if dd.EnableRequired {
         interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
