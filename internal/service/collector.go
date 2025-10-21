@@ -27,10 +27,12 @@ type CollectorService struct {
 
 // TaskContext 任务上下文
 type TaskContext struct {
-	Task      *model.Task
-	Cancel    context.CancelFunc
-	StartTime time.Time
-	Status    string
+	Task                    *model.Task
+	Cancel                  context.CancelFunc
+	StartTime               time.Time
+	DeviceInteractStartTime time.Time  // 设备交互开始时间
+	DeviceInteractDuration  time.Duration // 设备交互时长
+	Status                  string
 }
 
 // CollectRequest 采集请求
@@ -97,7 +99,7 @@ func getPlatformDefaults(platform string) platformInteractDefaults {
 		if dd, ok := cfg.Collector.DeviceDefaults[p]; ok {
 			// 平台超时（优先使用嵌套 timeout.timeout_all）
 			if dd.Timeout.TimeoutAll > 0 {
-				base.Timeout = int(dd.Timeout.TimeoutAll.Seconds())
+				base.Timeout = dd.Timeout.TimeoutAll
 			}
 			if len(dd.PromptSuffixes) > 0 {
 				base.PromptSuffixes = dd.PromptSuffixes
@@ -169,7 +171,7 @@ func getPlatformDefaults(platform string) platformInteractDefaults {
 		} else if dd, ok := cfg.Collector.DeviceDefaults["default"]; ok {
 			// 平台未命中时，使用 default 平台的配置与嵌套 timeout
 			if dd.Timeout.TimeoutAll > 0 {
-				base.Timeout = int(dd.Timeout.TimeoutAll.Seconds())
+				base.Timeout = dd.Timeout.TimeoutAll
 			}
 			if len(dd.PromptSuffixes) > 0 {
 				base.PromptSuffixes = dd.PromptSuffixes
@@ -366,6 +368,10 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 	}
 
 	interactDefaults := getPlatformDefaults(platform)
+	
+	// 获取timeout_all配置（系统强制中断超时）
+	timeoutAll := s.config.GetTimeoutAll(platform)
+	
 	// 计算有效超时与重试（用于队列等待与任务上下文）
 	effTimeout := 30
 	if request.TaskTimeout != nil && *request.TaskTimeout > 0 {
@@ -497,23 +503,60 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 		logger.Error("Failed to save task", "task_id", request.TaskID, "error", err)
 	}
 
-	// 创建任务上下文
-	taskCtx, cancel := context.WithTimeout(ctx, time.Duration(effTimeout)*time.Second)
+	// 创建任务上下文 - 使用timeout_all作为系统强制中断超时
+	taskCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutAll)*time.Second)
 	defer cancel()
 
 	s.addTaskContext(request.TaskID, &TaskContext{
-		Task:      task,
-		Cancel:    cancel,
-		StartTime: startTime,
-		Status:    "running",
+		Task:                    task,
+		Cancel:                  cancel,
+		StartTime:               startTime,
+		DeviceInteractStartTime: time.Now(), // 记录设备交互开始时间
+		Status:                  "running",
 	})
 	defer s.removeTaskContext(request.TaskID)
+
+	// 记录设备交互开始时间和timeout_all配置
+	deviceInteractStart := time.Now()
+	s.logTaskInfo(request.TaskID, fmt.Sprintf("Device interaction started with timeout_all=%ds", timeoutAll))
 
 	// 执行SSH采集
 	execStart := time.Now()
 	results, err := s.executeSSHCollection(taskCtx, request, commands, effRetries)
 	response.Duration = time.Since(execStart)
 	response.DurationMS = response.Duration.Milliseconds()
+
+	// 记录设备交互时长
+	deviceInteractDuration := time.Since(deviceInteractStart)
+	s.logTaskInfo(request.TaskID, fmt.Sprintf("Device interaction completed in %v", deviceInteractDuration))
+
+	// 更新TaskContext中的设备交互时长
+	s.mutex.Lock()
+	if taskCtx, exists := s.tasks[request.TaskID]; exists {
+		taskCtx.DeviceInteractDuration = deviceInteractDuration
+	}
+	s.mutex.Unlock()
+
+	// 检查是否因timeout_all超时而中断
+	if err != nil && taskCtx.Err() == context.DeadlineExceeded {
+		timeoutErr := fmt.Errorf("system interrupt: by timeout_all setting (%ds)", timeoutAll)
+		response.Success = false
+		response.Error = timeoutErr.Error()
+		task.Status = model.TaskStatusFailed
+		task.ErrorMsg = timeoutErr.Error()
+
+		// 记录超时中断日志
+		s.logTaskError(request.TaskID, fmt.Sprintf("System forced interruption after %v (timeout_all=%ds)", deviceInteractDuration, timeoutAll))
+		
+		// 更新任务状态
+		task.Duration = response.Duration.Milliseconds()
+		task.UpdatedAt = time.Now()
+		if updateErr := s.updateTask(task); updateErr != nil {
+			logger.Error("Failed to update task", "task_id", request.TaskID, "error", updateErr)
+		}
+		
+		return response, nil
+	}
 
 	if err != nil {
 		response.Success = false
@@ -728,11 +771,12 @@ func (s *CollectorService) GetTaskStatus(taskID string) (*TaskContext, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	if taskCtx, exists := s.tasks[taskID]; exists {
-		return taskCtx, nil
+	taskCtx, exists := s.tasks[taskID]
+	if !exists {
+		return nil, fmt.Errorf("task not found: %s", taskID)
 	}
 
-	return nil, fmt.Errorf("task not found: %s", taskID)
+	return taskCtx, nil
 }
 
 // CancelTask 取消任务
@@ -762,6 +806,38 @@ func (s *CollectorService) GetStats() map[string]interface{} {
 		"max_workers":  cap(s.workers),
 		"busy_workers": len(s.workers),
 		"ssh_pool":     s.sshPool.GetStats(),
+	}
+
+	// 添加设备交互时长统计
+	if len(s.tasks) > 0 {
+		var totalDuration time.Duration
+		var completedTasks int
+		var maxDuration time.Duration
+		var minDuration time.Duration = time.Hour * 24 // 初始化为一个大值
+
+		for _, taskCtx := range s.tasks {
+			if taskCtx.DeviceInteractDuration > 0 {
+				totalDuration += taskCtx.DeviceInteractDuration
+				completedTasks++
+				
+				if taskCtx.DeviceInteractDuration > maxDuration {
+					maxDuration = taskCtx.DeviceInteractDuration
+				}
+				if taskCtx.DeviceInteractDuration < minDuration {
+					minDuration = taskCtx.DeviceInteractDuration
+				}
+			}
+		}
+
+		if completedTasks > 0 {
+			stats["device_interaction"] = map[string]interface{}{
+				"completed_tasks":    completedTasks,
+				"total_duration_ms":  totalDuration.Milliseconds(),
+				"avg_duration_ms":    totalDuration.Milliseconds() / int64(completedTasks),
+				"max_duration_ms":    maxDuration.Milliseconds(),
+				"min_duration_ms":    minDuration.Milliseconds(),
+			}
+		}
 	}
 
 	return stats

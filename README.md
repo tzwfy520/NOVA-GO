@@ -23,19 +23,41 @@
 - 配置与模型：`internal/config`、`internal/model`
 - 文档：`docs/api/*.md`、`docs/simulate.md`
 
+## 文档
+
+- [API 文档](docs/api/) - 接口使用说明
+- [配置文档](docs/configuration.md) - 配置参数详解
+- [部署文档](docs/DEPLOYMENT.md) - 部署和运维指南
+- [二进制打包说明](docs/binary_packaging.md) - 构建、打包和部署指南
+
 ## 快速开始
-1) 构建与运行（本地开发）
-- 构建：`go build -o dist/sshcollector ./cmd/server`
-- 启动：`./dist/sshcollector -config configs/dev.yaml`
-- 健康检查：`GET /health`（默认端口 `18000`）
 
-2) 构建脚本
-- `./scripts/build.sh`（打包产物）
+### 1. 本地开发
+```bash
+# 构建开发版本
+go build -o dist/sshcollector ./cmd/server
 
-3) 目录约定
+# 启动服务
+./dist/sshcollector -config configs/dev.yaml
+
+# 健康检查
+curl http://localhost:18000/health
+```
+
+### 2. 生产构建
+```bash
+# 使用构建脚本（推荐）
+VERSION=1.2.3 ./scripts/build.sh
+
+# 构建产物位于 binaryfile/nova-go-v1.2.3/
+# 包含 Linux、macOS、Windows 多平台可执行文件
+```
+
+### 3. 目录约定
 - 配置：`configs/dev.yaml | prod.yaml`
 - 日志：`logs/`
 - 模拟：`simulate/`（含 `simulate.yaml` 与命令文件目录）
+- 构建产物：`binaryfile/nova-go-v${VERSION}/`
 
 ## 配置要点
 - 并发档位（推荐）：在 `configs/*.yaml` 中为不同机器规格设置安全并发
@@ -207,6 +229,7 @@ curl -sS -X POST 'http://localhost:18000/api/v1/collector/batch/custom' \
 - 单元测试：`go test -v ./...`
 - Lint：`golangci-lint run`
 - 示例程序：`cmd/cli/test_batch_custom.go`（批量采集示例）
+- 构建脚本：`./scripts/build.sh`（多平台交叉编译，详见 [二进制打包说明](docs/binary_packaging.md)）
 
 ## 贡献指南
 - 提交类型：`feat`/`fix`/`docs`/`refactor`/`test`/`chore`/`style`

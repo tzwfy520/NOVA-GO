@@ -217,9 +217,9 @@ func Load(configPath string) (*Config, error) {
 
 	// 兼容新嵌套：ssh.timeout.*（若存在则覆盖旧字段）
 	if viper.IsSet("ssh.timeout.timeout_all") {
-		to := viper.GetDuration("ssh.timeout.timeout_all")
+		to := viper.GetInt("ssh.timeout.timeout_all")  // 改为GetInt
 		if to > 0 {
-			config.SSH.Timeout = to
+			config.SSH.Timeout = time.Duration(to) * time.Second  // 转换为time.Duration
 		}
 	}
 	// 兼容旧顶层：ssh.timeout（若仍为时长字符串则生效；嵌套块不影响）
@@ -304,7 +304,7 @@ func setDefaults() {
 
 	// SSH 超时新默认（替换旧的 connect_timeout 与顶层 timeout）
 	// 全局执行窗口（接口未指定时可参考此值）
-	viper.SetDefault("ssh.timeout.timeout_all", 60*time.Second)
+	viper.SetDefault("ssh.timeout.timeout_all", 60)  // 改为int类型，单位秒
 	// 拨号与握手阶段拆分默认（合并为 ConnectTimeout 使用）
 	viper.SetDefault("ssh.timeout.dial_timeout", 2)
 	viper.SetDefault("ssh.timeout.auth_timeout", 5)
@@ -424,6 +424,27 @@ func (c *Config) GetServerAddr() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 }
 
+// GetTimeoutAll 获取设备的全局超时配置（秒）
+// 平台特定配置优先级高于全局配置
+func (c *Config) GetTimeoutAll(platform string) int {
+	// 首先检查平台特定配置
+	if platform != "" {
+		if platformConfig, exists := c.Collector.DeviceDefaults[platform]; exists {
+			if platformConfig.Timeout.TimeoutAll > 0 {
+				return platformConfig.Timeout.TimeoutAll
+			}
+		}
+	}
+	
+	// 使用全局配置（转换为秒）
+	if c.SSH.Timeout > 0 {
+		return int(c.SSH.Timeout.Seconds())
+	}
+	
+	// 默认值
+	return 60
+}
+
 // OutputFilterConfig 输出过滤器配置
 type OutputFilterConfig struct {
 	// Prefixes: 移除以这些字符串开头的行（例如分页提示 "---- More ----" 或纯 more 行）
@@ -468,7 +489,7 @@ type InteractTimingConfig struct {
 
 // PlatformTimeoutConfig 平台层 timeout 嵌套块（兼容全局结构）
 type PlatformTimeoutConfig struct {
-	TimeoutAll     time.Duration       `mapstructure:"timeout_all"`
+	TimeoutAll     int                 `mapstructure:"timeout_all"`     // 改为int类型（秒）
 	DialTimeoutSec int                 `mapstructure:"dial_timeout"`
 	AuthTimeoutSec int                 `mapstructure:"auth_timeout"`
 	Interact       InteractTimingConfig `mapstructure:"interact_timeout"`
