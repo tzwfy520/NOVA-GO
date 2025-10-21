@@ -5,8 +5,9 @@
 ## 功能概览
 - 采集执行：批量任务、并发队列、重试与超时控制、任务取消
 - 连接池：可配置连接超时、会话上限、KeepAlive，复用稳定
-- API接口：统一 RESTful，含批量自定义采集、状态查询与格式化接口
-- 结果处理：原始输出与格式化视图并存，便于二次处理
+- API接口：统一 RESTful，含批量自定义采集、状态查询、格式化、备份与配置下发接口
+- 结果处理：原始输出与格式化视图并存，支持TextFSM模板解析，便于二次处理
+- 配置管理：支持配置备份到本地/MinIO存储，快速配置下发与状态检查
 - 模拟器：可本地模拟设备，支持命令匹配（精确/模糊/前缀）与提示符
 - 日志与追踪：结构化日志、任务时长、错误追踪
 - 配置管理：YAML 配置，支持并发档位与平台默认值     # 监听配置文件支持热加载。当前支持设备适配参数/日志等级/并发数实时调整
@@ -70,12 +71,12 @@ collector:
     - `GET /collector/task/:task_id/status`（任务状态：`task_id`、`status`、`start_time`、`duration`；任务不存在返回 `404 TASK_NOT_FOUND`）
     - `POST /collector/task/:task_id/cancel`（取消任务，若任务不存在返回 `404`）
   - 格式化：
-    - `POST /formatted/batch`（批量格式化；与采集结果结合）
-    - `POST /formatted/fast`（快速格式化；参见 `docs/api/formatted_fast.md`）
+    - `POST /formatted/batch`（批量格式化；与采集结果结合，支持TextFSM模板）
+    - `POST /formatted/fast`（快速格式化；单设备实时处理，参见 `docs/api/formatted_fast.md`）
   - 备份：
-    - `POST /backup/batch`（批量备份）
+    - `POST /backup/batch`（批量配置备份；支持本地和MinIO存储，参见 `docs/api/backup.md`）
   - 部署：
-    - `POST /deploy/fast`（快速部署与状态检查）
+    - `POST /deploy/fast`（快速配置下发；支持状态检查和干运行模式，参见 `docs/api/deploy.md`）
   - 设备管理：
     - `POST /devices`、`GET /devices`、`GET /devices/:id`、`PUT /devices/:id`、`DELETE /devices/:id`、`POST /devices/:id/test`
 
@@ -135,7 +136,12 @@ curl -sS 'http://localhost:18000/api/v1/collector/stats'
 }
 ```
 
-更多细节与完整示例请参见 `docs/api/collector.md` 与 `docs/api/formatted_fast.md`。
+更多细节与完整示例请参见：
+- 采集接口：`docs/api/collector.md`
+- 快速格式化：`docs/api/formatted_fast.md`
+- 批量格式化：`docs/api/formatted.md`
+- 配置备份：`docs/api/backup.md`
+- 配置下发：`docs/api/deploy.md`
 
 ## 采集 API
 - 批量自定义采集：`POST /api/v1/collector/batch/custom`
@@ -209,11 +215,17 @@ curl -sS -X POST 'http://localhost:18000/api/v1/collector/batch/custom' \
 ## 许可证
 - 本项目采用 MIT License
 
-## 未来计划
-- 增加设备适配类型（可提出适配请求，需要提出方配合）
-- 增加内置解析能力
-- API/SNMP 协议对接能力
-
-## 路线图
-- v1.1.0（计划）：Web 管理界面、更多设备类型支持、插件系统、集群模式
-- v1.2.0（计划）：异常检测、自动化运维脚本、移动端应用、多租户支持
+## 未来计划与路线图
+- 增强功能：
+  - 支持更多设备平台（Juniper、F5、Arista等）
+  - 增强TextFSM模板管理与验证
+  - 支持配置模板化下发与回滚机制
+  - 增加设备发现与自动化配置功能
+- 性能优化：
+  - 优化大规模设备并发处理能力
+  - 增强连接池管理与资源复用
+  - 支持分布式任务调度
+- 监控与运维：
+  - 增加Prometheus指标导出
+  - 支持任务执行历史与审计日志
+  - 增强错误诊断与故障排查能力

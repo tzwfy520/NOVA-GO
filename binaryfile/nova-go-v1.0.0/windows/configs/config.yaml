@@ -1,0 +1,319 @@
+# SSH Collector Pro 默认配置
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 18000
+  mode: "release"  # 运行模式：debug, release, test（影响Gin日志与恢复）
+  read_timeout: 60s  # 服务端读取请求头/体的超时；防止慢请求拖垮连接
+  write_timeout: 120s # 服务端写出响应的超时；建议≥批量任务最长执行窗口
+  simulate_enable: true  # 模拟服务开关：true 启用 simulate/simulate.yaml 定义的 SSH 模拟服务
+
+# 采集器配置
+collector:
+  id: "collector-001"
+  type: "ssh"
+  version: "1.0.0"
+  tags: ["production", "ssh"]
+  # 默认重试次数：接口未指定时使用
+  retry_flags: 1
+  # 并发档位（优先级高于 concurrent）：可选 S/M/L/XL
+  concurrency_profile: "S"
+  # 并发档位映射：根据宿主机规格选择安全的并发数
+  concurrency_profiles:
+    S:    # 2c4g 虚拟机规格
+      concurrent: 8
+      threads: 32
+    M:    # 4c8g 虚拟机规格
+      concurrent: 16
+      threads: 64
+    L:    # 8c16g 虚拟机规格
+      concurrent: 32
+      threads: 128
+    XL:   # 16c32g 虚拟机规格
+      concurrent: 64
+      threads: 256
+  # 设备平台默认参数：按平台注入 enable/分页关闭命令、提示符后缀与自动交互
+  device_defaults:
+    # 通用兜底平台（当设备平台未配置时回退）
+    default:
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions:
+          - except_output: "do you want to save this config? yes/no"
+            command_auto_send: "yes"
+          - except_output: "do you want to reload this device? yes/no"
+            command_auto_send: "no"
+        error_hints:
+          - "ERROR:"
+          - "invalid parameters detect"
+        case_insensitive: true
+        trim_space: true
+    cisco_ios:
+      prompt_suffixes: [">", "#"]
+      disable_paging_cmds: ["terminal length 0"]
+      config_mode_clis: ["configure terminal"]
+      config_exit_cli: "end"
+      enable_required: true
+      # 当需要提权时，设置提权命令与提示匹配
+      # 示例：
+      # enable_cli: "enable"            # 或 Linux: "sudo -i"
+      # enable_except_output: "Password:"      # 接收到该输出后自动输入 enable 密码
+      enable_cli: "enable"
+      enable_except_output: "Password:"
+      skip_delayed_echo: true
+      # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
+      # timeout:
+      #   timeout_all: 60
+      #   dial_timeout: 2
+      #   auth_timeout: 5
+      #   interact_timeout:
+      #     command_interval_ms: 120
+      #     command_timeout_sec: 30
+      #     quiet_after_ms: 800
+      #     quiet_poll_interval_ms: 250
+      #     prompt_inducer_interval_ms: 1000
+      #     prompt_inducer_max_count: 12
+      #     exit_pause_ms: 150
+      #     enable_password_fallback_ms: 1500
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions:
+          - except_output: "--more--"
+            command_auto_send: " "
+          - except_output: "more"
+            command_auto_send: " "
+          - except_output: "press any key"
+            command_auto_send: " "
+          - except_output: "confirm"
+            command_auto_send: "y"
+          - except_output: "[yes/no]"
+            command_auto_send: "yes"
+        error_hints:
+          - "invalid input detected"
+          - "incomplete command"
+          - "unknown command"
+          - "invalid autocommand"
+          - "line has invalid autocommand"
+        case_insensitive: true
+        trim_space: true
+    huawei:
+      prompt_suffixes: [">", "#", "]"]
+      disable_paging_cmds: ["screen-length disable"]
+      config_mode_clis: ["system-view immediately", "system-view"]
+      config_exit_cli: "quit"
+      enable_required: false
+      skip_delayed_echo: true
+      # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
+      # timeout:
+      #   timeout_all: 60
+      #   dial_timeout: 2
+      #   auth_timeout: 5
+      #   interact_timeout:
+      #     command_interval_ms: 120
+      #     command_timeout_sec: 30
+      #     quiet_after_ms: 800
+      #     quiet_poll_interval_ms: 250
+      #     prompt_inducer_interval_ms: 1000
+      #     prompt_inducer_max_count: 12
+      #     exit_pause_ms: 150
+      #     enable_password_fallback_ms: 1500
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions:
+          - except_output: "more"
+            command_auto_send: " "
+          - except_output: "press any key"
+            command_auto_send: " "
+          - except_output: "confirm"
+            command_auto_send: "y"
+        error_hints:
+          - "error:"
+          - "unrecognized command"
+        case_insensitive: true
+        trim_space: true
+    h3c:
+      prompt_suffixes: [">", "#", "]"]
+      disable_paging_cmds: ["screen-length disable"]
+      config_mode_clis: ["system-view immediately", "system-view"]
+      config_exit_cli: "quit"
+      enable_required: false
+      skip_delayed_echo: true
+      # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
+      # timeout:
+      #   timeout_all: 60
+      #   dial_timeout: 2
+      #   auth_timeout: 5
+      #   interact_timeout:
+      #     command_interval_ms: 120
+      #     command_timeout_sec: 30
+      #     quiet_after_ms: 800
+      #     quiet_poll_interval_ms: 250
+      #     prompt_inducer_interval_ms: 1000
+      #     prompt_inducer_max_count: 12
+      #     exit_pause_ms: 150
+      #     enable_password_fallback_ms: 1500
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions:
+          - except_output: "more"
+            command_auto_send: " "
+          - except_output: "press any key"
+            command_auto_send: " "
+          - except_output: "confirm"
+            command_auto_send: "y"
+        error_hints:
+          - "error:"
+          # - "unrecognized command"
+        case_insensitive: true
+        trim_space: true
+    linux:
+      prompt_suffixes: [">", "#", "$"]
+      enable_required: true
+      # 当需要提权时，设置提权命令与提示匹配
+      # 示例：
+      # 使用 -S 通过 stdin 输送密码；-p 'Password:' 显示密码提示
+      enable_cli: "sudo -S -p 'Password:' -i"
+      # sudo密码提示匹配
+      enable_except_output: "Password:"
+      skip_delayed_echo: true
+      # timeout（可选）：平台交互超时与节奏参数，结构与 ssh.timeout 一致
+      # timeout:
+      #   timeout_all: 60
+      #   dial_timeout: 2
+      #   auth_timeout: 5
+      #   interact_timeout:
+      #     command_interval_ms: 120
+      #     command_timeout_sec: 30
+      #     quiet_after_ms: 800
+      #     quiet_poll_interval_ms: 250
+      #     prompt_inducer_interval_ms: 1000
+      #     prompt_inducer_max_count: 12
+      #     exit_pause_ms: 150
+      #     enable_password_fallback_ms: 1500
+      output_filter:
+        prefixes:
+          - "---- More ----"
+          - "more"
+        contains:
+          - "--more--"
+        case_insensitive: true
+        trim_space: true
+      interact:
+        auto_interactions: []
+        error_hints:
+          - "incorrect password"
+          - "authentication failed"
+        case_insensitive: true
+        trim_space: true
+# SSH配置
+ssh:
+  keep_alive_interval: 15s
+  cleanup_interval: 30s
+  max_sessions: 100
+  # 全局 SSH 超时与交互节奏配置
+  timeout:
+    timeout_all: 60         # 针对单台设备的全局执行窗口, 包括所有阶段（拨号、认证、交互）
+    dial_timeout: 2          # 拨号/握手阶段超时（原 connect_timeout 拆分）
+    auth_timeout: 5          # 认证阶段超时（原 connect_timeout 拆分）
+    interact_timeout:
+      command_interval_ms: 120
+      command_timeout_sec: 30
+      quiet_after_ms: 800
+      quiet_poll_interval_ms: 250
+      prompt_inducer_interval_ms: 1000
+      prompt_inducer_max_count: 12
+      exit_pause_ms: 150
+      enable_password_fallback_ms: 1500
+
+deploy:
+  # 部署等待时间（毫秒），用于部署前后状态采集与下发后等待
+  # 默认 500 毫秒（0.5 秒），可根据设备特性调整
+  deploy_wait_ms: 500
+
+# 数据库配置
+database:
+  sqlite:
+    path: "./data/collector.db"
+    max_idle_conns: 10
+    max_open_conns: 100
+    conn_max_lifetime: 3600s
+
+
+# 日志配置
+log:
+  level: "debug"  # 可选：debug, info, warn, error
+  format: "json"  # json, text
+  output: "both"  # console, file, both
+  file_path: "./logs/collector.log"
+  max_size: 100  # MB
+  max_backups: 5
+  max_age: 30  # days
+  compress: true
+  modules:
+    collector:
+      level: "debug"
+    simulate:
+      level: "debug"
+
+# 采集数据存储（运行时可覆盖默认值）
+storage:
+  minio:
+    host: "139.196.196.96"
+    port: 29000
+    access_key: "minioadmin"
+    secret_key: "Eccom@2024"
+    bucket: "sshcollector-raw"
+    secure: false
+  postgres:
+    host: "127.0.0.1"
+    port: 5432
+    username: "postgres"
+    password: "postgres"
+    database: "sshcollector"
+
+# 备份服务配置（本地存储为默认）
+backup:
+  storage_backend: "minio"   # local | minio
+  prefix: "configs"          # 顶层保存目录前缀（base_dir 下的一级目录）
+  aggregate:
+    enabled: true             # 是否启用聚合写入
+    filename: "all_cli.txt"   # 聚合文件名，可带扩展名
+    aggregate_only: false     # 启用后仅生产聚合文件（跳过逐命令写入）
+  local:
+    base_dir: "./data/backups"
+    prefix: ""               # 可选的局部前缀，最终路径 prefix/local.prefix/save_dir
+    mkdir_if_missing: true
+    compress: false
+
+# 格式化数据配置（仅定义 MinIO 路径前缀）
+data_format:
+  minio_prefix: "data-formats"
