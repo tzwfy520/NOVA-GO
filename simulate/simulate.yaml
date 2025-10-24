@@ -26,3 +26,5 @@ device_name:
     device_type: cisco_ios
   huawei-01:
     device_type: huawei
+  h3c-01:
+    device_type: huawei

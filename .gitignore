@@ -69,13 +69,17 @@ coverage.html
 
 # Deploy
 deploy/
-*.config.yaml
-*.dev.yaml
-*.prod.yaml
-# binaryfile/
+.*/config.yaml
+.*/dev.yaml
+.*/prod.yaml    
+binaryfile/
 # Data
 data/
 
 # zipfile
 .tar.gz
 .tar
+.zip
+
+# 模拟目录
+simulate/

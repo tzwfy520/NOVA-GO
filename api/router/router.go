@@ -1,38 +1,38 @@
 package router
 
 import (
-    "fmt"
-    "net/http"
-    "time"
+	"fmt"
+	"net/http"
+	"time"
 
-    "github.com/gin-gonic/gin"
-    "github.com/sshcollectorpro/sshcollectorpro/api/handler"
-    "github.com/sshcollectorpro/sshcollectorpro/internal/service"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+	"github.com/gin-gonic/gin"
+	"github.com/sshcollectorpro/sshcollectorpro/api/handler"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/service"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 )
 
 // SetupRouter 设置路由
 func SetupRouter(collectorService *service.CollectorService, backupService *service.BackupService, formatService *service.FormatService, deployService *service.DeployService) *gin.Engine {
 	// 设置Gin模式
 	gin.SetMode(gin.ReleaseMode)
-	
+
 	// 创建路由引擎
 	r := gin.New()
-	
+
 	// 添加中间件
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 	r.Use(CORSMiddleware())
 	r.Use(RequestIDMiddleware())
 	r.Use(LoggingMiddleware())
-	
+
 	// 创建处理器
-    collectorHandler := handler.NewCollectorHandler(collectorService)
-    deviceHandler := handler.NewDeviceHandler()
-    backupHandler := handler.NewBackupHandler(backupService)
-    formattedHandler := handler.NewFormattedHandler(formatService)
-    deployHandler := handler.NewDeployHandler(deployService)
-	
+	collectorHandler := handler.NewCollectorHandler(collectorService)
+	deviceHandler := handler.NewDeviceHandler()
+	backupHandler := handler.NewBackupHandler(backupService)
+	formattedHandler := handler.NewFormattedHandler(formatService)
+	deployHandler := handler.NewDeployHandler(deployService)
+
 	// 根路径
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -41,13 +41,13 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 			"status":  "running",
 		})
 	})
-	
+
 	// API v1 路由组
 	v1 := r.Group("/api/v1")
 	{
 		// 健康检查
 		v1.GET("/health", collectorHandler.Health)
-		
+
 		// 采集器相关路由
 		collector := v1.Group("/collector")
 		{
@@ -59,32 +59,32 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 			collector.POST("/task/:task_id/cancel", collectorHandler.CancelTask)
 			collector.GET("/stats", collectorHandler.GetStats)
 		}
-		
-        // 设备管理路由
-        devices := v1.Group("/devices")
-        {
-            devices.POST("", deviceHandler.CreateDevice)
-            devices.GET("", deviceHandler.ListDevices)
-            devices.GET("/:id", deviceHandler.GetDevice)
-            devices.PUT("/:id", deviceHandler.UpdateDevice)
-            devices.DELETE("/:id", deviceHandler.DeleteDevice)
-            devices.POST("/:id/test", deviceHandler.TestConnection)
-        }
 
-        // 备份路由
-        v1.POST("/backup/batch", backupHandler.BatchBackup)
+		// 设备管理路由
+		devices := v1.Group("/devices")
+		{
+			devices.POST("", deviceHandler.CreateDevice)
+			devices.GET("", deviceHandler.ListDevices)
+			devices.GET("/:id", deviceHandler.GetDevice)
+			devices.PUT("/:id", deviceHandler.UpdateDevice)
+			devices.DELETE("/:id", deviceHandler.DeleteDevice)
+			devices.POST("/:id/test", deviceHandler.TestConnection)
+		}
 
-        // 数据格式化路由
-        formatted := v1.Group("/formatted")
-        {
-            formatted.POST("/batch", formattedHandler.BatchFormatted)
-            formatted.POST("/fast", formattedHandler.FastFormatted)
-        }
+		// 备份路由
+		v1.POST("/backup/batch", backupHandler.BatchBackup)
 
-        // 部署路由
-        v1.POST("/deploy/fast", deployHandler.FastDeploy)
-    }
-	
+		// 数据格式化路由
+		formatted := v1.Group("/formatted")
+		{
+			formatted.POST("/batch", formattedHandler.BatchFormatted)
+			formatted.POST("/fast", formattedHandler.FastFormatted)
+		}
+
+		// 部署路由
+		v1.POST("/deploy/fast", deployHandler.FastDeploy)
+	}
+
 	// 404处理
 	r.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -93,7 +93,7 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 			"path":    c.Request.URL.Path,
 		})
 	})
-	
+
 	return r
 }
 
@@ -132,13 +132,13 @@ func LoggingMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 记录请求开始时间
 		start := time.Now()
-		
+
 		// 处理请求
 		c.Next()
-		
+
 		// 计算处理时间
 		duration := time.Since(start)
-		
+
 		// 获取请求信息
 		requestID := c.GetString("request_id")
 		method := c.Request.Method
@@ -146,7 +146,7 @@ func LoggingMiddleware() gin.HandlerFunc {
 		statusCode := c.Writer.Status()
 		clientIP := c.ClientIP()
 		userAgent := c.Request.UserAgent()
-		
+
 		// 记录日志
 		logger.Info("HTTP Request",
 			"request_id", requestID,
@@ -157,7 +157,7 @@ func LoggingMiddleware() gin.HandlerFunc {
 			"client_ip", clientIP,
 			"user_agent", userAgent,
 		)
-		
+
 		// 如果是错误状态码，记录错误日志
 		if statusCode >= 400 {
 			logger.Error("HTTP Error",
@@ -174,6 +174,6 @@ func LoggingMiddleware() gin.HandlerFunc {
 
 // generateRequestID 生成请求ID
 func generateRequestID() string {
-    // 简单的请求ID生成，实际项目中可以使用UUID
-    return fmt.Sprintf("%d", time.Now().UnixNano())
+	// 简单的请求ID生成，实际项目中可以使用UUID
+	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
