@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SSH Collector 管理页</title>
+  <script>
+    // 直接重定向到 collector 页面
+    window.location.replace('/admin/collector');
+  </script>
+</head>
+<body>
+  <p>正在跳转到采集管理页面...</p>
+</body>
+</html>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="section">
+          <h3 class="muted">新增设备</h3>
+          <label>IP</label><input id="new_ip" placeholder="192.168.1.1" />
+          <label>端口</label><input id="new_port" type="number" value="22" />
+          <label>设备类型（platform/vendor/model）</label><input id="new_type" placeholder="huawei/h3c/cisco..." />
+          <label>用户名</label><input id="new_user" />
+          <label>密码</label><input id="new_pass" />
+          <div class="row">
+            <button onclick="createDevice()">创建设备</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 设备类型适配管理 -->
+      <section class="card">
+        <h2>设备类型适配（默认参数）</h2>
+        <div class="section">
+          <div class="row">
+            <button onclick="loadDeviceDefaults()">加载默认参数</button>
+            <select id="platformSelect"></select>
+          </div>
+        </div>
+        <div class="section">
+          <label>prompt_suffixes</label>
+          <input id="dd_prompt_suffixes" placeholder=", 分隔" />
+          <label>disable_paging_cmds</label>
+          <input id="dd_disable_paging_cmds" placeholder=", 分隔" />
+          <label>enable_required</label>
+          <select id="dd_enable_required"><option value="true">true</option><option value="false">false</option></select>
+          <label>skip_delayed_echo</label>
+          <select id="dd_skip_delayed_echo"><option value="true">true</option><option value="false">false</option></select>
+          <label>config_mode_clis</label>
+          <input id="dd_config_mode_clis" placeholder=", 分隔" />
+          <label>config_exit_cli</label>
+          <input id="dd_config_exit_cli" placeholder="exit/quit" />
+          <div class="row">
+            <button onclick="updateDeviceDefaults()">更新平台默认参数</button>
+          </div>
+        </div>
+        <p class="muted">说明：当前更新仅在运行时生效，持久化到 config.yaml 可后续补充。</p>
+      </section>
+
+      <!-- 模拟命令管理 -->
+      <section class="card">
+        <h2>模拟命令管理</h2>
+        <div class="section row">
+          <input id="sim_platform" placeholder="平台，如 huawei" />
+          <button onclick="loadSimCmds()">按平台查询</button>
+        </div>
+        <div class="section">
+          <table id="simTable">
+            <thead>
+              <tr><th>ID</th><th>Platform</th><th>Command</th><th>Output</th><th>操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="section">
+          <h3 class="muted">新增/更新</h3>
+          <label>Platform</label><input id="sim_new_platform" />
+          <label>Command</label><textarea id="sim_new_command"></textarea>
+          <label>Output</label><textarea id="sim_new_output"></textarea>
+          <div class="row">
+            <button onclick="createSimCmd()">新增</button>
+            <button class="secondary" onclick="updateSelectedSimCmd()">更新所选</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 日志查询 -->
+      <section class="card">
+        <h2>日志查询（Tail）</h2>
+        <div class="section row">
+          <input id="log_q" placeholder="关键字" />
+          <select id="log_level">
+            <option value="">级别(可选)</option>
+            <option>debug</option><option>info</option><option>warn</option><option>error</option>
+          </select>
+          <input id="log_limit" type="number" value="200" style="width:120px" />
+          <button onclick="loadLogs()">查询</button>
+        </div>
+        <div class="log-box" id="logBox"></div>
+      </section>
+
+      <!-- 简易采集（自定义命令） -->
+      <section class="card">
+        <h2>简易采集（自定义命令）</h2>
+        <label>目标IP</label><input id="collect_ip" placeholder="192.168.1.1" />
+        <label>端口</label><input id="collect_port" type="number" value="22" />
+        <label>平台</label><input id="collect_platform" placeholder="huawei/h3c..." />
+        <label>用户名</label><input id="collect_user" />
+        <label>密码</label><input id="collect_pass" />
+        <label>命令列表（每行一条）</label><textarea id="collect_cli"></textarea>
+        <div class="row">
+          <button onclick="runCollect()">执行采集</button>
+        </div>
+        <div class="section">
+          <h3 class="muted">采集结果</h3>
+          <div class="log-box" id="collectResult"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    // 简易通知
+    function toast(msg) { console.log(msg); }
+
+    // 设备管理
+    async function loadDevices() {
+      const res = await fetch('/api/v1/devices');
+      const data = await res.json();
+      const list = (data.data && data.data.devices) || [];
+      document.getElementById('deviceCount').textContent = `共 ${list.length} 台设备`;
+      const tbody = document.querySelector('#deviceTable tbody');
+      tbody.innerHTML = '';
+      list.forEach(d => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${d.id||''}</td><td>${d.ip}</td><td>${d.port}</td><td>${d.device_type||''}</td><td>${d.status||''}</td>
+                        <td><button onclick="testDevice('${d.id}')">测试连接</button></td>`;
+        tbody.appendChild(tr);
+      });
+    }
+    async function createDevice() {
+      const payload = {
+        ip: document.getElementById('new_ip').value.trim(),
+        port: Number(document.getElementById('new_port').value),
+        device_type: document.getElementById('new_type').value.trim(),
+        username: document.getElementById('new_user').value,
+        password: document.getElementById('new_pass').value,
+      };
+      const res = await fetch('/api/v1/devices', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const data = await res.json();
+      if (data.code === 'SUCCESS') { toast('设备创建成功'); loadDevices(); } else { alert(data.message||'创建失败'); }
+    }
+    async function testDevice(id) {
+      const res = await fetch(`/api/v1/devices/${id}/test`, { method:'POST' });
+      const data = await res.json();
+      alert((data.message||'测试完成') + ` 状态: ${data.data?.status}`);
+      loadDevices();
+    }
+
+    // 设备类型默认参数
+    async function loadDeviceDefaults() {
+      const res = await fetch('/api/v1/admin/device-defaults');
+      const data = await res.json();
+      const dd = data.data || {};
+      const platforms = Object.keys(dd);
+      const sel = document.getElementById('platformSelect'); sel.innerHTML = '';
+      platforms.forEach(p => { const opt = document.createElement('option'); opt.value = p; opt.textContent = p; sel.appendChild(opt); });
+      if (platforms.length > 0) { sel.value = platforms[0]; fillDeviceDefaults(dd[platforms[0]]); }
+      sel.onchange = () => { fillDeviceDefaults(dd[sel.value]); };
+    }
+    function fillDeviceDefaults(obj) {
+      const getArr = a => (Array.isArray(a)? a.join(','): '');
+      document.getElementById('dd_prompt_suffixes').value = getArr(obj?.prompt_suffixes);
+      document.getElementById('dd_disable_paging_cmds').value = getArr(obj?.disable_paging_cmds);
+      document.getElementById('dd_enable_required').value = String(obj?.enable_required ?? false);
+      document.getElementById('dd_skip_delayed_echo').value = String(obj?.skip_delayed_echo ?? false);
+      document.getElementById('dd_config_mode_clis').value = getArr(obj?.config_mode_clis);
+      document.getElementById('dd_config_exit_cli').value = obj?.config_exit_cli || '';
+    }
+    async function updateDeviceDefaults() {
+      const p = document.getElementById('platformSelect').value;
+      const payload = {
+        prompt_suffixes: document.getElementById('dd_prompt_suffixes').value.split(',').map(s=>s.trim()).filter(Boolean),
+        disable_paging_cmds: document.getElementById('dd_disable_paging_cmds').value.split(',').map(s=>s.trim()).filter(Boolean),
+        enable_required: document.getElementById('dd_enable_required').value === 'true',
+        skip_delayed_echo: document.getElementById('dd_skip_delayed_echo').value === 'true',
+        config_mode_clis: document.getElementById('dd_config_mode_clis').value.split(',').map(s=>s.trim()).filter(Boolean),
+        config_exit_cli: document.getElementById('dd_config_exit_cli').value.trim(),
+      };
+      const res = await fetch(`/api/v1/admin/device-defaults/${p}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const data = await res.json();
+      if (data.code === 'SUCCESS') toast('更新成功'); else alert(data.message||'更新失败');
+    }
+
+    // 模拟命令
+    let selectedSimId = null;
+    async function loadSimCmds() {
+      const p = document.getElementById('sim_platform').value.trim();
+      const res = await fetch('/api/v1/simcmds' + (p? ('?platform='+encodeURIComponent(p)):''));
+      const data = await res.json();
+      const list = data.data || [];
+      const tbody = document.querySelector('#simTable tbody'); tbody.innerHTML = '';
+      list.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${item.id}</td><td>${item.platform}</td><td><pre>${escapeHtml(item.command)}</pre></td><td><pre>${escapeHtml(item.output)}</pre></td>
+                        <td><button onclick="selectSim(${item.id}, '${item.platform}', \`${escapeBacktick(item.command)}\`, \`${escapeBacktick(item.output)}\`)">选择</button>
+                            <button class='danger' onclick="delSim(${item.id})">删除</button></td>`;
+        tbody.appendChild(tr);
+      });
+    }
+    function selectSim(id, platform, command, output) {
+      selectedSimId = id;
+      document.getElementById('sim_new_platform').value = platform;
+      document.getElementById('sim_new_command').value = command;
+      document.getElementById('sim_new_output').value = output;
+    }
+    async function createSimCmd() {
+      const payload = {
+        platform: document.getElementById('sim_new_platform').value.trim(),
+        command: document.getElementById('sim_new_command').value,
+        output: document.getElementById('sim_new_output').value,
+      };
+      const res = await fetch('/api/v1/simcmds', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const data = await res.json(); if (data.code==='SUCCESS'){ toast('新增成功'); loadSimCmds(); } else { alert(data.message||'失败'); }
+    }
+    async function updateSelectedSimCmd() {
+      if (!selectedSimId) { alert('请先在表格中选择一条记录'); return; }
+      const payload = {
+        platform: document.getElementById('sim_new_platform').value.trim(),
+        command: document.getElementById('sim_new_command').value,
+        output: document.getElementById('sim_new_output').value,
+      };
+      const res = await fetch(`/api/v1/simcmds/${selectedSimId}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const data = await res.json(); if (data.code==='SUCCESS'){ toast('更新成功'); loadSimCmds(); } else { alert(data.message||'失败'); }
+    }
+    async function delSim(id) {
+      if (!confirm('确认删除?')) return;
+      const res = await fetch(`/api/v1/simcmds/${id}`, { method:'DELETE' });
+      const data = await res.json(); if (data.code==='SUCCESS'){ toast('删除成功'); loadSimCmds(); } else { alert(data.message||'失败'); }
+    }
+
+    // 日志查询
+    async function loadLogs() {
+      const q = document.getElementById('log_q').value.trim();
+      const lvl = document.getElementById('log_level').value;
+      const limit = document.getElementById('log_limit').value;
+      const res = await fetch(`/api/v1/logs/tail?limit=${limit}&q=${encodeURIComponent(q)}&level=${encodeURIComponent(lvl)}`);
+      const data = await res.json();
+      const lines = (data.data && data.data.lines) || [];
+      document.getElementById('logBox').innerHTML = lines.map(escapeHtml).join('\n');
+    }
+
+    // 采集
+    async function runCollect() {
+      const ip = document.getElementById('collect_ip').value.trim();
+      const port = Number(document.getElementById('collect_port').value);
+      const platform = document.getElementById('collect_platform').value.trim();
+      const user = document.getElementById('collect_user').value;
+      const pass = document.getElementById('collect_pass').value;
+      const cli = document.getElementById('collect_cli').value.split('\n').map(s=>s.trim()).filter(Boolean);
+      const payload = {
+        task_id: `web-${Date.now()}`,
+        task_name: 'web-collect',
+        devices: [{ device_ip: ip, device_port: port, device_name: ip, device_platform: platform, user_name: user, password: pass, cli_list: cli }]
+      };
+      const res = await fetch('/api/v1/collector/batch/custom', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      const data = await res.json();
+      document.getElementById('collectResult').textContent = JSON.stringify(data, null, 2);
+    }
+
+    // utils
+    function escapeHtml(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+    function escapeBacktick(s){ return String(s).replace(/`/g, '\\`'); }
+
+    // 初始加载
+    loadDevices(); loadDeviceDefaults(); loadSimCmds();
+  </script>
+</body>
+</html>

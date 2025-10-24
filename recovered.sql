@@ -1,0 +1,11 @@
+BEGIN;
+PRAGMA writable_schema = on;
+PRAGMA encoding = 'UTF-8';
+PRAGMA page_size = '4096';
+PRAGMA auto_vacuum = '0';
+PRAGMA user_version = '65536';
+PRAGMA application_id = '0';
+CREATE TABLE lost_and_found(rootpgno INTEGER, pgno INTEGER, nfield INTEGER, id INTEGER, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, c32, c33, c34, c35, c36, c37, c38, c39, c40, c41, c42, c43, c44, c45, c46, c47, c48, c49);
+INSERT INTO lost_and_found VALUES(53, 53, 50, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+PRAGMA writable_schema = off;
+COMMIT;

@@ -81,7 +81,6 @@ collector:
           quiet_poll_interval_ms: 250
           prompt_inducer_interval_ms: 1000
           prompt_inducer_max_count: 12
-          exit_pause_ms: 150
           enable_password_fallback_ms: 1500
       output_filter:
         prefixes:
@@ -124,7 +123,6 @@ collector:
         dial_timeout: 2
         auth_timeout: 5
         interact_timeout:
-          command_interval_ms: 120
           command_timeout_sec: 30
           quiet_after_ms: 800
           quiet_poll_interval_ms: 250
@@ -170,7 +168,6 @@ collector:
       #     command_timeout_sec: 30
       #     quiet_after_ms: 800
       #     quiet_poll_interval_ms: 250
-      #     prompt_inducer_interval_ms: 1000
       #     prompt_inducer_max_count: 12
       #     exit_pause_ms: 150
       #     enable_password_fallback_ms: 1500
@@ -215,7 +212,6 @@ collector:
       #     command_timeout_sec: 30
       #     quiet_after_ms: 800
       #     quiet_poll_interval_ms: 250
-      #     prompt_inducer_interval_ms: 1000
       #     prompt_inducer_max_count: 12
       #     exit_pause_ms: 150
       #     enable_password_fallback_ms: 1500
@@ -262,7 +258,7 @@ deploy:
 # 数据库配置
 database:
   sqlite:
-    path: "./data/collector.db"
+    path: "./collector.db"
     max_idle_conns: 10
     max_open_conns: 100
     conn_max_lifetime: 3600s

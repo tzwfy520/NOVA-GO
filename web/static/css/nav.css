@@ -1,0 +1,41 @@
+/* 侧边导航样式 */
+:root {
+  --sidebar-bg: #0f172a; /* slate-900 */
+  --sidebar-fg: #e5e7eb; /* gray-200 */
+  --sidebar-sep: #1f2937; /* gray-800 */
+  --sidebar-active: rgba(56, 189, 248, 0.15); /* sky-400 bg */
+}
+
+body.has-sidebar { padding-left: 240px; }
+
+.sidebar {
+  position: fixed;
+  left: 0; top: 0; bottom: 0;
+  width: 220px;
+  background: var(--sidebar-bg);
+  color: var(--sidebar-fg);
+  border-right: 1px solid var(--sidebar-sep);
+  overflow-y: auto;
+}
+.sidebar .brand {
+  font-weight: 600;
+  padding: 16px;
+  border-bottom: 1px solid var(--sidebar-sep);
+}
+.sidebar .menu { padding: 8px 0; }
+.sidebar a {
+  display: block;
+  color: var(--sidebar-fg);
+  text-decoration: none;
+  padding: 10px 16px;
+  font-size: 14px;
+}
+.sidebar a:hover { background: rgba(255,255,255,0.06); }
+.sidebar a.active { background: var(--sidebar-active); color: #fff; }
+.sidebar small { display: block; opacity: 0.7; padding: 6px 16px; }
+
+@media (max-width: 900px) {
+  body.has-sidebar { padding-left: 0; }
+  .sidebar { position: static; width: auto; display: flex; flex-wrap: wrap; }
+  .sidebar .brand { width: 100%; }
+}

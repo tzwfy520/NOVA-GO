@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>日志查询</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/css/nav.css" />
+  <script src="/static/js/nav.js" defer></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 20px; }
+    h1 { font-size: 20px; }
+    input, select { padding: 6px; margin: 4px 0; }
+    button { padding: 6px 12px; margin-right: 8px; }
+    pre { background: #0b1020; color: #c9d1d9; padding: 12px; border-radius: 6px; overflow: auto; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <h1>日志查询</h1>
+  <div class="row">
+    <label>行数</label>
+    <input id="lines" type="number" value="100" style="width:100px" />
+    <label>级别</label>
+    <select id="level">
+      <option value="">全部</option>
+      <option>debug</option>
+      <option>info</option>
+      <option>warn</option>
+      <option>error</option>
+    </select>
+    <label>关键字</label>
+    <input id="keyword" placeholder="例如 Simulate" style="min-width:200px" />
+    <button onclick="loadLogs()">查询</button>
+  </div>
+  <pre id="result">配置参数后点击查询</pre>
+
+  <script>
+    async function loadLogs() {
+      const q = new URLSearchParams();
+      const lines = parseInt(document.getElementById('lines').value, 10) || 100;
+      const level = document.getElementById('level').value;
+      const keyword = document.getElementById('keyword').value.trim();
+      q.set('lines', String(lines));
+      if (level) q.set('level', level);
+      if (keyword) q.set('keyword', keyword);
+      try {
+        const res = await fetch('/api/v1/logs/tail?' + q.toString());
+        const data = await res.json();
+        document.getElementById('result').textContent = (data.data && data.data.content) ? data.data.content : JSON.stringify(data, null, 2);
+      } catch (e) {
+        document.getElementById('result').textContent = '查询失败: ' + e;
+      }
+    }
+  </script>
+</body>
+</html>

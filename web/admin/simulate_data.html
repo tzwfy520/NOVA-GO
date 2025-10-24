@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>模拟数据</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/css/nav.css" />
+  <script src="/static/js/nav.js" defer></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 20px; }
+    h1 { font-size: 20px; }
+    input, textarea, select { padding: 6px; margin: 4px 0; }
+    input[type="text"], textarea { width: 100%; box-sizing: border-box; }
+    button { padding: 6px 12px; margin-right: 8px; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; margin-top: 8px; }
+    th, td { border: none; border-bottom: 1px solid #eef2f7; padding: 8px; text-align: left; }
+    thead th { background: #fafafa; font-weight: 600; }
+    tbody tr:hover { background: #f9fbff; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .muted { color: #666; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+    .card { border: 1px solid #f0f2f5; border-radius: 10px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    .section-title { font-size: 15px; font-weight: 600; margin: 6px 0; }
+    .diag { padding: 8px; border-radius: 6px; margin: 8px 0; font-size: 13px; }
+    .diag.info { background: #f6f8fa; color: #333; border: 1px solid #eaeef2; }
+    .diag.warn { background: #fff8e1; color: #8a6d3b; border: 1px solid #ffecb3; }
+    .diag.error { background: #fdecea; color: #b00020; border: 1px solid #f5c6cb; }
+  </style>
+</head>
+<body>
+  <h1>模拟数据</h1>
+  <div class="card">
+    <div class="grid">
+      <div>
+        <div class="row">
+          <select id="sim_ns_select" onchange="onSimNsChange(this.value)"></select>
+          <select id="sim_dev_select" onchange="onSimDevChange(this.value)"></select>
+          <button onclick="showSimNew()">新增</button>
+        </div>
+        <div id="problems_and_diagnostics" class="diag info" style="display:none"></div>
+        <table>
+          <thead>
+            <tr><th>ID</th><th>命令</th><th>操作</th></tr>
+          </thead>
+          <tbody id="simInfoTbody"></tbody>
+        </table>
+        <div id="simFormContainer" style="display:none; margin-top:24px">
+          <div class="section-title">新增/查看</div>
+          <label>设备命令</label>
+          <input id="sim_cmd_command" type="text" placeholder="例如：show version" />
+          <label>模拟回显</label>
+          <textarea id="sim_cmd_output" rows="8" placeholder="返回文本"></textarea>
+          <div class="row">
+            <button class="primary" onclick="createSimDeviceCmd()">保存</button>
+            <button class="secondary" onclick="hideSimForm()">收起</button>
+            <button class="secondary" onclick="clearSimForm()">清空</button>
+          </div>
+          <div class="muted" id="simCmdHint"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let nsList = []
+    let dnList = []
+    let selNamespace = ''
+    let selDeviceName = ''
+    let simItems = []
+
+    function setDiag(msg, level='info'){
+      const el = document.getElementById('problems_and_diagnostics')
+      if (!el) return
+      el.textContent = msg || ''
+      el.className = 'diag ' + (level || 'info')
+      el.style.display = msg ? 'block' : 'none'
+    }
+    function clearDiag(){ setDiag('', 'info') }
+
+    function escapeAttr(s){ return String(s||'').replace(/['"]/g, c => (c==='"'?'&quot;':'&#39;')) }
+
+    async function loadConfig(){
+      try {
+        const r = await fetch('/api/v1/simulate/config')
+        const data = await r.json()
+        const d = data && data.data
+        if (d && Array.isArray(d.namespaces)){ nsList = d.namespaces.map(x => Object.assign({enabled:true}, x)) }
+        if (d && Array.isArray(d.device_names)){ dnList = d.device_names.map(x => Object.assign({enabled:true}, x)) }
+      } catch (e) {
+        nsList = [{ port: 22001, name: 'default', idle_seconds: 180, max_conn: 5, enabled: true }]
+        dnList = []
+      }
+      initSimDataUI()
+    }
+
+    function initSimDataUI(){
+      const nsSelect = document.getElementById('sim_ns_select')
+      const devSelect = document.getElementById('sim_dev_select')
+
+      // 解析 URL 参数作为默认选择
+      let qNs = ''
+      let qDev = ''
+      try {
+        const sp = new URLSearchParams(window.location.search)
+        qNs = sp.get('namespace') || ''
+        qDev = sp.get('device_name') || ''
+      } catch (e) {}
+
+      // 计算默认选择（先根据参数，再回退默认）
+      const defaultNsObj = nsList.find(x => x.name === 'default') || nsList[0]
+      const defaultDevObj = dnList[0]
+      selNamespace = defaultNsObj ? defaultNsObj.name : ''
+      selDeviceName = defaultDevObj ? defaultDevObj.name : ''
+      const nsMatched = qNs && nsList.some(x => x.name === qNs)
+      const devMatched = qDev && dnList.some(x => x.name === qDev)
+      if (nsMatched) { selNamespace = qNs }
+      if (devMatched) { selDeviceName = qDev }
+
+      // 构建下拉项并设置 selected，更稳妥地应用默认值
+      nsSelect.innerHTML = nsList.map(x => `<option value="${escapeAttr(x.name||'')}"${x.name===selNamespace?' selected':''}>${escapeAttr(x.name||'')}</option>`).join('')
+      devSelect.innerHTML = dnList.map(x => `<option value="${escapeAttr(x.name||'')}"${x.name===selDeviceName?' selected':''}>${escapeAttr(x.name||'')}</option>`).join('')
+      nsSelect.value = selNamespace || ''
+      devSelect.value = selDeviceName || ''
+
+      if (qNs && !nsMatched && qDev && !devMatched) { setDiag('URL 参数 namespace 与 device_name 未匹配，已回退默认', 'warn') }
+      else if (qNs && !nsMatched) { setDiag('URL 参数 namespace 未匹配，已回退默认', 'warn') }
+      else if (qDev && !devMatched) { setDiag('URL 参数 device_name 未匹配，已回退默认', 'warn') }
+      else { clearDiag() }
+
+      loadSimDeviceCmds()
+    }
+
+    function getSelections(){
+      const nsSelect = document.getElementById('sim_ns_select')
+      const devSelect = document.getElementById('sim_dev_select')
+      selNamespace = nsSelect && nsSelect.value || ''
+      selDeviceName = devSelect && devSelect.value || ''
+    }
+
+    function onSimNsChange(v){ selNamespace = v||''; loadSimDeviceCmds() }
+    function onSimDevChange(v){ selDeviceName = v||''; loadSimDeviceCmds() }
+
+    function renderSimInfo(items){
+      const tbody = document.getElementById('simInfoTbody')
+      tbody.innerHTML = ''
+      items.forEach(item => {
+        const tr = document.createElement('tr')
+        const opHTML = `
+          <button onclick="viewSimDeviceCmd(${item.id})">查看</button>
+          ${item.enabled ? `<button onclick="disableSimDeviceCmd(${item.id})">禁用</button>` : `<button onclick="enableSimDeviceCmd(${item.id})">启用</button>`}
+          <button onclick="deleteSimDeviceCmd(${item.id})">删除</button>
+        `
+        tr.innerHTML = `<td>${item.id}</td><td>${escapeAttr(item.command||'')}</td><td>${opHTML}</td>`
+        tbody.appendChild(tr)
+      })
+    }
+
+    async function loadSimDeviceCmds(){
+      getSelections()
+      if (!selNamespace || !selDeviceName){ setDiag('请选择命名空间与设备', 'warn'); renderSimInfo([]); return }
+      try {
+        const r = await fetch(`/api/v1/sim-device-cmds?namespace=${encodeURIComponent(selNamespace)}&device_name=${encodeURIComponent(selDeviceName)}`)
+        const data = await r.json()
+        simItems = (data && data.data) || []
+      } catch (e) { simItems = [] }
+      renderSimInfo(simItems)
+      if (!simItems || simItems.length === 0) { setDiag('当前设备无模拟命令，可点击“新增”添加', 'info') } else { clearDiag() }
+    }
+
+    function showSimForm(){
+      const c = document.getElementById('simFormContainer')
+      if (c) c.style.display = 'block'
+    }
+    function hideSimForm(){
+      const c = document.getElementById('simFormContainer')
+      if (c) c.style.display = 'none'
+      const h = document.getElementById('simCmdHint')
+      if (h) h.textContent = ''
+    }
+
+    function showSimNew(){
+      showSimForm()
+      document.getElementById('sim_cmd_command').value = ''
+      document.getElementById('sim_cmd_output').value = ''
+      document.getElementById('simCmdHint').textContent = '新增：请选择 namespace 与设备后输入命令与回显'
+      document.getElementById('simFormContainer').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+    function clearSimForm(){ showSimNew() }
+
+    async function createSimDeviceCmd(){
+      const cmd = document.getElementById('sim_cmd_command').value.trim()
+      const out = document.getElementById('sim_cmd_output').value
+      if (!selNamespace || !selDeviceName){ alert('请先选择 namespace 与模拟设备'); return }
+      if (!cmd){ alert('设备命令不能为空'); return }
+      if (!out){ alert('模拟回显不能为空'); return }
+      const maxAttempts = 6
+      let attempt = 0
+      const backoff = () => Math.min(500, 100 * Math.pow(2, attempt))
+      while (attempt < maxAttempts) {
+        try {
+          const r = await fetch('/api/v1/sim-device-cmds', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ namespace: selNamespace, device_name: selDeviceName, command: cmd, output: out, enabled: true }) })
+          const data = await r.json()
+          if (data.code !== 'SUCCESS'){
+            const msg = String(data.message||'').toLowerCase()
+            if (msg.includes('database is locked') || msg.includes('sqlite_busy')){
+              attempt++
+              await new Promise(res => setTimeout(res, backoff()))
+              continue
+            }
+            throw new Error(data.message || '保存失败')
+          }
+          document.getElementById('simCmdHint').textContent = '保存成功'
+          hideSimForm()
+          loadSimDeviceCmds()
+          return
+        } catch (e) {
+          const msg = String(e && e.message || '').toLowerCase()
+          if (msg.includes('database is locked') || msg.includes('sqlite_busy')){
+            attempt++
+            await new Promise(res => setTimeout(res, backoff()))
+            continue
+          }
+          alert(e.message || '保存失败')
+          return
+        }
+      }
+      alert('保存失败：数据库繁忙，请稍后重试')
+    }
+
+    async function viewSimDeviceCmd(id){
+      try {
+        const r = await fetch(`/api/v1/sim-device-cmds/${id}`)
+        const data = await r.json()
+        const item = data && data.data
+        if (!item){ throw new Error(data.message || '查询失败') }
+        showSimForm()
+        document.getElementById('sim_cmd_command').value = item.command || ''
+        document.getElementById('sim_cmd_output').value = item.output || ''
+        document.getElementById('simCmdHint').textContent = '查看：ID '+ id
+        document.getElementById('simFormContainer').scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      } catch (e) {
+        alert(e.message || '查询失败')
+      }
+    }
+
+    async function disableSimDeviceCmd(id){
+      try {
+        const r = await fetch(`/api/v1/sim-device-cmds/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ enabled: false }) })
+        const data = await r.json()
+        if (data.code !== 'SUCCESS'){ throw new Error(data.message || '禁用失败') }
+        loadSimDeviceCmds()
+      } catch (e) {
+        alert(e.message || '禁用失败')
+      }
+    }
+
+    async function enableSimDeviceCmd(id){
+      try {
+        const r = await fetch(`/api/v1/sim-device-cmds/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ enabled: true }) })
+        const data = await r.json()
+        if (data.code !== 'SUCCESS'){ throw new Error(data.message || '启用失败') }
+        loadSimDeviceCmds()
+      } catch (e) {
+        alert(e.message || '启用失败')
+      }
+    }
+
+    async function deleteSimDeviceCmd(id){
+      if (!confirm('确认删除该模拟命令？')) return
+      try {
+        const r = await fetch(`/api/v1/sim-device-cmds/${id}`, { method:'DELETE' })
+        const data = await r.json()
+        if (data.code !== 'SUCCESS'){ throw new Error(data.message || '删除失败') }
+        loadSimDeviceCmds()
+      } catch (e) {
+        alert(e.message || '删除失败')
+      }
+    }
+
+    loadConfig()
+  </script>
+</body>
+</html>

@@ -1,0 +1,213 @@
+collector:
+  device_defaults:
+    # vendor: generic
+    default:
+      interact:
+          auto_interactions:
+              - command_auto_send: "yes"
+                except_output: do you want to save
+          case_insensitive: true
+          error_hints:
+              - 'ERROR:'
+              - invalid
+              - failed
+          trim_space: true
+      output_filter:
+          case_insensitive: true
+          contains:
+              - --more--
+              - error
+          prefixes:
+              - '---- More ----'
+              - more
+          trim_space: true
+      timeout:
+          auth_timeout: 20
+          dial_timeout: 15
+          interact_timeout:
+              command_interval_ms: 200
+              command_timeout_sec: 10
+              enable_password_fallback_ms: 500
+              exit_pause_ms: 200
+              prompt_inducer_interval_ms: 300
+              prompt_inducer_max_count: 3
+              quiet_after_ms: 400
+              quiet_poll_interval_ms: 50
+          timeout_all: 60
+    cisco_ios:
+      config_exit_cli: end
+      config_mode_clis:
+          - configure terminal
+      disable_paging_cmds:
+          - terminal length 0
+      enable_cli: enable
+      enable_except_output: 'Password:'
+      enable_required: true
+      interact:
+          auto_interactions:
+              - command_auto_send: ' '
+                except_output: --more--
+              - command_auto_send: ' '
+                except_output: more
+              - command_auto_send: ' '
+                except_output: press any key
+              - command_auto_send: "y"
+                except_output: confirm
+              - command_auto_send: "yes"
+                except_output: '[yes/no]'
+          case_insensitive: true
+          error_hints:
+              - invalid input detected
+              - incomplete command
+              - unknown command
+              - invalid autocommand
+              - line has invalid autocommand
+          trim_space: true
+      output_filter:
+          case_insensitive: true
+          contains:
+              - --more--
+          prefixes:
+              - '---- More ----'
+              - more
+          trim_space: true
+      prompt_suffixes:
+          - '>'
+          - '#'
+      skip_delayed_echo: true
+      timeout:
+          auth_timeout: 5
+          dial_timeout: 2
+          interact_timeout:
+              command_interval_ms: 120
+              command_timeout_sec: 30
+              enable_password_fallback_ms: 1500
+              exit_pause_ms: 150
+              prompt_inducer_interval_ms: 1000
+              prompt_inducer_max_count: 12
+              quiet_after_ms: 800
+              quiet_poll_interval_ms: 250
+          timeout_all: 60
+    h3c:
+      config_exit_cli: quit
+      config_mode_clis:
+          - system-view immediately
+          - system-view
+      disable_paging_cmds:
+          - screen-length disable
+      enable_required: false
+      interact:
+          auto_interactions:
+              - command_auto_send: ' '
+                except_output: more
+              - command_auto_send: ' '
+                except_output: press any key
+              - command_auto_send: "y"
+                except_output: confirm
+          case_insensitive: true
+          error_hints:
+              - 'error:'
+          trim_space: true
+      output_filter:
+          case_insensitive: true
+          contains:
+              - --more--
+          prefixes:
+              - '---- More ----'
+              - more
+          trim_space: true
+      prompt_suffixes:
+          - '>'
+          - '#'
+          - ']'
+      skip_delayed_echo: true
+    huawei:
+      config_exit_cli: quit
+      config_mode_clis:
+          - system-view immediately
+          - system-view
+      disable_paging_cmds:
+          - screen-length disable
+      enable_required: false
+      interact:
+          auto_interactions:
+              - command_auto_send: ' '
+                except_output: more
+              - command_auto_send: ' '
+                except_output: press any key
+              - command_auto_send: "y"
+                except_output: confirm
+          case_insensitive: true
+          error_hints:
+              - 'error:'
+              - unrecognized command
+          trim_space: true
+      output_filter:
+          case_insensitive: true
+          contains:
+              - --more--
+          prefixes:
+              - '---- More ----'
+              - more
+          trim_space: true
+      prompt_suffixes:
+          - '>'
+          - '#'
+          - ']'
+      skip_delayed_echo: true
+      timeout:
+          auth_timeout: 5
+          dial_timeout: 2
+          interact_timeout:
+              command_interval_ms: 120
+              command_timeout_sec: 30
+              enable_password_fallback_ms: 1500
+              exit_pause_ms: 150
+              prompt_inducer_interval_ms: 1000
+              prompt_inducer_max_count: 12
+              quiet_after_ms: 800
+              quiet_poll_interval_ms: 250
+          timeout_all: 45
+    linux:
+      enable_cli: sudo -S -p 'Password:' -i
+      enable_except_output: 'Password:'
+      enable_required: true
+      interact:
+          auto_interactions: []
+          case_insensitive: true
+          error_hints:
+              - incorrect password
+              - authentication failed
+          trim_space: true
+      output_filter:
+          case_insensitive: true
+          contains:
+              - --more--
+          prefixes:
+              - '---- More ----'
+              - more
+          trim_space: true
+      prompt_suffixes:
+          - '>'
+          - '#'
+          - $
+      skip_delayed_echo: true
+    # vendor: test
+    # system: test
+    ssh-test:
+      interact:
+          case_insensitive: true
+          error_hints:
+              - error
+          trim_space: true
+      output_filter:
+          case_insensitive: true
+          contains:
+              - --more--
+          prefixes:
+              - '---- More ----'
+              - more
+              - -more-
+          trim_space: true
+      timeout:
+          interact_timeout: {}

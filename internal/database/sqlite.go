@@ -43,7 +43,8 @@ func InitSQLite(cfg config.SQLiteConfig) error {
 
 	// 连接数据库，使用modernc.org/sqlite驱动
 	var err error
-	dsn := cfg.Path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
+	// 提高 busy_timeout 到 15000ms，缓解并发写争用
+	dsn := cfg.Path + "?_pragma=busy_timeout(15000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
 	db, err = gorm.Open(sqlite.Dialector{
 		DriverName: "sqlite",
 		DSN:        dsn,
@@ -58,7 +59,7 @@ func InitSQLite(cfg config.SQLiteConfig) error {
 		return fmt.Errorf("failed to get sql.DB: %w", err)
 	}
 
-	// 设置连接池参数（SQLite 推荐单连接，避免并发写导致嵌套事务与锁冲突）
+	// 设置连接池参数（单连接），确保 PRAGMA 在唯一连接上生效，避免锁争用
 	sqlDB.SetMaxIdleConns(1)
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
@@ -66,7 +67,7 @@ func InitSQLite(cfg config.SQLiteConfig) error {
 	// 额外保护：运行期设置 PRAGMA（某些环境 DSN 选项可能未生效）
 	_ = db.Exec("PRAGMA journal_mode=WAL;").Error
 	_ = db.Exec("PRAGMA synchronous=NORMAL;").Error
-	_ = db.Exec("PRAGMA busy_timeout=5000;").Error
+	_ = db.Exec("PRAGMA busy_timeout=15000;").Error
 	_ = db.Exec("PRAGMA foreign_keys=ON;").Error
 
 	// 自动迁移数据库表
@@ -84,6 +85,14 @@ func autoMigrate() error {
 		&model.Task{},
 		&model.TaskLog{},
 		&model.DeviceInfo{},
+		&model.SimCommand{},
+		&model.SSHPlatform{},
+		// 新增：模拟设置配置表
+		&model.SimNamespace{},
+		&model.SimDeviceType{},
+		&model.SimDeviceName{},
+		// 新增：按命名空间与设备的模拟命令
+		&model.SimDeviceCommand{},
 	)
 }
 
@@ -131,6 +140,38 @@ func WithRetry(fn func(*gorm.DB) error, attempts int, sleep time.Duration) error
 	return err
 }
 
+// Transaction 执行事务
+func Transaction(fn func(*gorm.DB) error) error {
+	return db.Transaction(fn)
+}
+
+// TransactionWithRetry 在事务级别检测并发锁错误并重试，避免长时间持有锁
+func TransactionWithRetry(fn func(*gorm.DB) error, attempts int, sleep time.Duration) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	if sleep <= 0 {
+		sleep = 50 * time.Millisecond
+	}
+	var err error
+	for i := 0; i < attempts; i++ {
+		// 使用短事务，避免在失败后长时间持锁
+		err = db.Transaction(fn)
+		if err == nil {
+			return nil
+		}
+		if !IsBusyError(err) {
+			return err
+		}
+		// Busy：退避后重试
+		time.Sleep(sleep)
+		if sleep < 500*time.Millisecond {
+			sleep *= 2
+		}
+	}
+	return err
+}
+
 // Close 关闭数据库连接
 func Close() error {
 	if db != nil {
@@ -155,11 +196,6 @@ func Health() error {
 	}
 
 	return sqlDB.Ping()
-}
-
-// Transaction 执行事务
-func Transaction(fn func(*gorm.DB) error) error {
-	return db.Transaction(fn)
 }
 
 // GetStats 获取数据库统计信息

@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>SSH适配管理</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/css/nav.css" />
+  <script src="/static/js/nav.js" defer></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 0; }
+    /* 调整主体与侧边导航间距：避免双重左侧留白 */
+    .container { padding: 16px; }
+    h1 { font-size: 20px; margin: 8px 0 16px; }
+    .muted { color: #666; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .section { border: 1px solid #eaecef; border-radius: 6px; padding: 12px; margin-bottom: 16px; background: #fff; }
+    label { font-size: 13px; color: #555; margin-right: 4px; }
+    input, select, textarea { font-size: 13px; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; }
+    input[type="number"] { width: 120px; }
+    button { font-size: 13px; padding: 6px 10px; border: 1px solid #888; border-radius: 4px; background: #f5f5f5; cursor: pointer; }
+    button.primary { background: #2f80ed; color: #fff; border-color: #2f80ed; }
+    button.secondary { background: #eee; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { font-size: 12px; border: 1px solid #eaecef; padding: 6px; text-align: left; }
+    th { background: #f9fafb; }
+    /* 参数编辑区域改为纵向单列布局 */
+    .grid-2, .grid-3 { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    .kv { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .list-box { border: 1px dashed #ddd; border-radius: 6px; padding: 8px; margin: 6px 0; }
+    .list-item { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+    .yaml-box { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; background: #f6f8fa; border: 1px solid #eaecef; border-radius: 6px; padding: 10px; max-height: 360px; overflow: auto; }
+    .hint { font-size: 12px; color: #888; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>SSH适配管理</h1>
+    <p class="muted">管理设备平台适配参数，支持新增/删除/查看与生成 <code>configs/auto-ssh.yaml</code>。</p>
+
+    <div class="section">
+      <div class="row">
+        <button onclick="loadPlatforms()">刷新列表</button>
+        <span class="muted" id="platCount"></span>
+      </div>
+      <table>
+        <thead><tr>
+          <th>ID</th><th>ssh类型</th><th>更新时间</th><th>厂商</th><th>系统</th><th>备注</th><th>操作</th>
+        </tr></thead>
+        <tbody id="platTbody"></tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2 style="font-size:16px; margin:0 0 10px;">新增平台</h2>
+      <div class="row">
+        <label>ssh类型</label><input id="new_type" placeholder="例如 default, cisco_ios, huawei" />
+        <label>厂商</label><input id="new_vendor" placeholder="可选" />
+        <label>系统</label><input id="new_system" placeholder="可选" />
+        <label>备注</label><input id="new_remark" placeholder="可选" style="width:240px" />
+        <button class="primary" onclick="createPlatform()">新增并打开编辑</button>
+      </div>
+      <div class="hint">提示：<code>default</code> 类型不可删除；初次新增会填充示例参数。</div>
+    </div>
+
+    <div class="section" id="editBox" style="display:none;">
+      <h2 style="font-size:16px; margin:0 0 10px;">参数编辑</h2>
+      <div class="grid-2">
+        <div>
+          <div class="kv"><label>当前平台</label><input id="cur_type" disabled /></div>
+          <div class="kv"><label>厂商</label><input id="cur_vendor" /><label>系统</label><input id="cur_system" /><label>备注</label><input id="cur_remark" style="width:200px" /></div>
+          <div class="row">
+            <button onclick="saveMeta()">保存元信息</button>
+            <button onclick="previewYAML()">预览该平台YAML</button>
+          </div>
+          <div id="yamlPreview" class="yaml-box" style="margin-top:8px; display:none;"></div>
+        </div>
+        <div>
+          <div class="kv"><label>enable_required</label><select id="p_enable_required"><option value="">(默认)</option><option value="true">true</option><option value="false">false</option></select></div>
+          <div class="kv"><label>enable_cli</label><input id="p_enable_cli" placeholder="例如 enable / sudo -i" /></div>
+          <div class="kv"><label>enable_except_output</label><input id="p_enable_except_output" placeholder="例如 Password:" /></div>
+          <div class="kv"><label>config_exit_cli</label><input id="p_config_exit_cli" placeholder="例如 end / quit" /></div>
+          <div class="kv"><label>skip_delayed_echo</label><select id="p_skip_delayed_echo"><option value="">(默认)</option><option value="true">true</option><option value="false">false</option></select></div>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div>
+          <h3 style="font-size:14px; margin:8px 0;">prompt_suffixes</h3>
+          <div class="list-box" id="list_prompt_suffixes"></div>
+          <button onclick="addItem('prompt_suffixes')">+ 新增</button>
+        </div>
+        <div>
+          <h3 style="font-size:14px; margin:8px 0;">disable_paging_cmds</h3>
+          <div class="list-box" id="list_disable_paging_cmds"></div>
+          <button onclick="addItem('disable_paging_cmds')">+ 新增</button>
+        </div>
+        <div>
+          <h3 style="font-size:14px; margin:8px 0;">config_mode_clis</h3>
+          <div class="list-box" id="list_config_mode_clis"></div>
+          <button onclick="addItem('config_mode_clis')">+ 新增</button>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <h3 style="font-size:14px; margin:8px 0;">output_filter</h3>
+          <div class="kv"><label>case_insensitive</label><select id="of_case"><option value="">(默认)</option><option value="true">true</option><option value="false">false</option></select></div>
+          <div class="kv"><label>trim_space</label><select id="of_trim"><option value="">(默认)</option><option value="true">true</option><option value="false">false</option></select></div>
+          <div class="list-box" id="list_of_prefixes"></div>
+          <button onclick="addSubItem('output_filter','prefixes')">+ prefixes</button>
+          <div class="list-box" id="list_of_contains"></div>
+          <button onclick="addSubItem('output_filter','contains')">+ contains</button>
+        </div>
+        <div>
+          <h3 style="font-size:14px; margin:8px 0;">interact</h3>
+          <div class="kv"><label>case_insensitive</label><select id="ia_case"><option value="">(默认)</option><option value="true">true</option><option value="false">false</option></select></div>
+          <div class="kv"><label>trim_space</label><select id="ia_trim"><option value="">(默认)</option><option value="true">true</option><option value="false">false</option></select></div>
+          <div class="list-box" id="list_ia_error_hints"></div>
+          <button onclick="addSubItem('interact','error_hints')">+ error_hints</button>
+          <div class="list-box" id="list_ia_auto_interactions"></div>
+          <button onclick="addAutoInteraction()">+ auto_interaction</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3 style="font-size:14px; margin:8px 0;">timeout</h3>
+        <div class="grid-3">
+          <div class="kv"><label>timeout_all</label><input type="number" id="to_all" placeholder="秒" /></div>
+          <div class="kv"><label>dial_timeout</label><input type="number" id="to_dial" /></div>
+          <div class="kv"><label>auth_timeout</label><input type="number" id="to_auth" /></div>
+          <div class="kv"><label>command_interval_ms</label><input type="number" id="to_cmd_interval" /></div>
+          <div class="kv"><label>command_timeout_sec</label><input type="number" id="to_cmd_timeout" /></div>
+          <div class="kv"><label>quiet_after_ms</label><input type="number" id="to_quiet_after" /></div>
+          <div class="kv"><label>quiet_poll_interval_ms</label><input type="number" id="to_quiet_poll" /></div>
+          <div class="kv"><label>prompt_inducer_interval_ms</label><input type="number" id="to_pi_interval" /></div>
+          <div class="kv"><label>prompt_inducer_max_count</label><input type="number" id="to_pi_max" /></div>
+          <div class="kv"><label>exit_pause_ms</label><input type="number" id="to_exit_pause" /></div>
+          <div class="kv"><label>enable_password_fallback_ms</label><input type="number" id="to_enable_fallback" /></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button class="primary" onclick="saveParams()">保存参数</button>
+        <button onclick="generateYAML()">生成全量YAML文件</button>
+        <span class="muted" id="saveHint"></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+// 全局错误捕获：仅记录日志，避免弹窗打断用户
+window.addEventListener('error', function(e) {
+  var msg = (e.error && e.error.message) || e.message || 'Unknown error';
+  console.error('[Page Error]', e.error || e);
+});
+// 捕获未处理的 Promise 拒绝
+window.addEventListener('unhandledrejection', function(e) {
+  var msg = (e.reason && e.reason.message) || e.reason || 'Unhandled rejection';
+  console.error('[UnhandledRejection]', msg);
+});
+let platforms = []
+let current = null
+let params = {}
+
+function api(path, opts) {
+  return fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}))
+    .then(async r => {
+      var ct = (r.headers && r.headers.get && typeof r.headers.get === 'function' && r.headers.get('content-type')) || ''
+      if (typeof r.json === 'function' && ct.indexOf('application/json') !== -1) {
+        return r.json()
+      }
+      var txt = ''
+      if (typeof r.text === 'function') {
+        txt = await r.text()
+      } else {
+        console.warn('[api] Response.text missing or not a function', r)
+      }
+      try { return JSON.parse(txt || '{}') } catch (e) {
+        return { code: 'HTTP_' + r.status, message: txt }
+      }
+    })
+}
+
+// 统一错误通知：避免弹窗，仅记录日志并在页面轻量提示
+function notifyError(err) {
+  try {
+    var msg = (err && err.message) || (typeof err === 'string' ? err : '发生错误')
+    var hint = document.getElementById('saveHint')
+    if (hint) { hint.textContent = msg }
+  } catch (e) { /* ignore */ }
+}
+
+function loadPlatforms() {
+  api('/api/v1/ssh-adapter/platforms')
+    .then(res => {
+      if (!res || res.code !== 'SUCCESS') throw new Error(res && res.message || '加载失败')
+      platforms = Array.isArray(res.data) ? res.data : []
+      try {
+        const tbody = document.getElementById('platTbody')
+        console.log('[loadPlatforms] fn-types', {
+          fmtTime: typeof fmtTime,
+          safe: typeof safe,
+          openEdit: typeof openEdit,
+          delPlatform: typeof delPlatform,
+          NumberType: typeof Number
+        })
+        tbody.innerHTML = ''
+        var list = Array.isArray(platforms) ? platforms : []
+         for (var i = 0; i < list.length; i++) {
+           var p = list[i]
+           const tr = document.createElement('tr')
+           const tdId = document.createElement('td'); tdId.textContent = p.id == null ? '' : '' + p.id
+           const tdType = document.createElement('td'); tdType.textContent = p.ssh_type == null ? '' : '' + p.ssh_type
+           const tdTime = document.createElement('td'); tdTime.textContent = p.updated_at == null ? '' : '' + p.updated_at
+           const tdVendor = document.createElement('td'); tdVendor.textContent = p.vendor == null ? '' : '' + p.vendor
+           const tdSystem = document.createElement('td'); tdSystem.textContent = p.system == null ? '' : '' + p.system
+           const tdRemark = document.createElement('td'); tdRemark.textContent = p.remark == null ? '' : '' + p.remark
+           const tdAct = document.createElement('td')
+           const openBtn = document.createElement('button'); openBtn.className = 'btn-open'; openBtn.textContent = '查看'; openBtn.dataset.id = p.id == null ? '' : '' + p.id
+           tdAct.appendChild(openBtn)
+           if (typeof openEdit === 'function') {
+             openBtn.addEventListener('click', function(){ try { openEdit(Number(this.dataset.id)) } catch(e){ try { if (typeof notifyError === 'function') notifyError(e) } catch(_){} } })
+           }
+           if (p.ssh_type !== 'default') {
+             const delBtn = document.createElement('button'); delBtn.className = 'secondary btn-del'; delBtn.textContent = '删除'; delBtn.dataset.id = p.id == null ? '' : '' + p.id
+             tdAct.appendChild(delBtn)
+             if (typeof delPlatform === 'function') {
+               delBtn.addEventListener('click', function(){ try { delPlatform(Number(this.dataset.id)) } catch(e){ try { if (typeof notifyError === 'function') notifyError(e) } catch(_){} } })
+             }
+           } else {
+             const tip = document.createElement('span'); tip.className = 'muted'; tip.textContent = '不可删除'
+             tdAct.appendChild(tip)
+           }
+           tr.appendChild(tdId)
+           tr.appendChild(tdType)
+           tr.appendChild(tdTime)
+           tr.appendChild(tdVendor)
+           tr.appendChild(tdSystem)
+           tr.appendChild(tdRemark)
+           tr.appendChild(tdAct)
+           tbody.appendChild(tr)
+         }
+        document.getElementById('platCount').textContent = `共 ${platforms.length} 个平台`
+      } catch (e) {
+        console.error('[loadPlatforms.render] failed', e)
+        throw e
+      }
+    })
+    .catch(function(err){ try { if (typeof notifyError === 'function') notifyError(err) } catch(ee){} })
+}
+
+function fmtTime(t) { if (!t) return ''; try { return new Date(t).toLocaleString(); } catch(e) { return '' } }
+function safe(s) { return s == null ? '' : '' + s }
+
+function createPlatform() {
+  const body = {
+    ssh_type: document.getElementById('new_type').value.trim(),
+    vendor: document.getElementById('new_vendor').value.trim(),
+    system: document.getElementById('new_system').value.trim(),
+    remark: document.getElementById('new_remark').value.trim(),
+  }
+  if (!body.ssh_type) { window.alert('ssh类型不能为空'); return }
+  api('/api/v1/ssh-adapter/platforms', { method: 'POST', body: JSON.stringify(body) })
+    .then(res => {
+      if (res.code !== 'SUCCESS') throw new Error(res.message)
+      loadPlatforms()
+      openEdit(res.data.id)
+    })
+    .catch(notifyError)
+}
+
+function openEdit(id) {
+  api(`/api/v1/ssh-adapter/platforms/${id}`)
+    .then(res => {
+      if (res.code !== 'SUCCESS') throw new Error(res.message)
+      current = res.data
+      document.getElementById('cur_type').value = current.ssh_type
+      document.getElementById('cur_vendor').value = safe(current.vendor)
+      document.getElementById('cur_system').value = safe(current.system)
+      document.getElementById('cur_remark').value = safe(current.remark)
+      document.getElementById('yamlPreview').style.display = 'none'
+      loadParams(current.id)
+      document.getElementById('editBox').style.display = ''
+    })
+    .catch(notifyError)
+}
+
+function loadParams(id) {
+  api(`/api/v1/ssh-adapter/platforms/${id}/params`)
+    .then(res => {
+      if (res.code !== 'SUCCESS') throw new Error(res.message)
+      params = res.data || {}
+      bindForm()
+    })
+    .catch(notifyError)
+}
+
+function bindForm() {
+  const getArr = (key) => Array.isArray(params[key]) ? params[key] : []
+  renderList('prompt_suffixes', getArr('prompt_suffixes'))
+  renderList('disable_paging_cmds', getArr('disable_paging_cmds'))
+  renderList('config_mode_clis', getArr('config_mode_clis'))
+
+  valSelect('p_enable_required', params.enable_required)
+  document.getElementById('p_enable_cli').value = params.enable_cli || ''
+  document.getElementById('p_enable_except_output').value = params.enable_except_output || ''
+  document.getElementById('p_config_exit_cli').value = params.config_exit_cli || ''
+  valSelect('p_skip_delayed_echo', params.skip_delayed_echo)
+
+  const of = params.output_filter || {}
+  valSelect('of_case', of.case_insensitive)
+  valSelect('of_trim', of.trim_space)
+  renderSubList('output_filter', 'prefixes', Array.isArray(of.prefixes) ? of.prefixes : [])
+  renderSubList('output_filter', 'contains', Array.isArray(of.contains) ? of.contains : [])
+
+  const ia = params.interact || {}
+  valSelect('ia_case', ia.case_insensitive)
+  valSelect('ia_trim', ia.trim_space)
+  renderSubList('interact', 'error_hints', Array.isArray(ia.error_hints) ? ia.error_hints : [])
+  renderAutoInteractions(Array.isArray(ia.auto_interactions) ? ia.auto_interactions : [])
+
+  const to = params.timeout || {}
+  const tio = to.interact_timeout || {}
+  setNum('to_all', to.timeout_all)
+  setNum('to_dial', to.dial_timeout)
+  setNum('to_auth', to.auth_timeout)
+  setNum('to_cmd_interval', tio.command_interval_ms)
+  setNum('to_cmd_timeout', tio.command_timeout_sec)
+  setNum('to_quiet_after', tio.quiet_after_ms)
+  setNum('to_quiet_poll', tio.quiet_poll_interval_ms)
+  setNum('to_pi_interval', tio.prompt_inducer_interval_ms)
+  setNum('to_pi_max', tio.prompt_inducer_max_count)
+  setNum('to_exit_pause', tio.exit_pause_ms)
+  setNum('to_enable_fallback', tio.enable_password_fallback_ms)
+}
+
+function valSelect(id, v) {
+  const el = document.getElementById(id)
+  if (v === true) el.value = 'true'
+  else if (v === false) el.value = 'false'
+  else el.value = ''
+}
+function setNum(id, v) { document.getElementById(id).value = (v == null ? '' : v) }
+
+function renderList(key, arr) {
+  const box = document.getElementById('list_' + key)
+  box.innerHTML = ''
+  arr.forEach((v, i) => {
+    const row = document.createElement('div')
+    row.className = 'list-item'
+    row.innerHTML = `<input value="${escapeHTML(v || '')}" style="width:250px" /> <button onclick="rmItem('${escapeHTML(key)}', ${i})">删除</button>`
+    box.appendChild(row)
+  })
+}
+function addItem(key) { const arr = Array.isArray(params[key]) ? params[key] : []; arr.push(''); params[key] = arr; renderList(key, arr) }
+function rmItem(key, idx) { 
+  // 删除前确认
+  if (!window.confirm('确认删除该项？')) return;
+  const arr = Array.isArray(params[key]) ? params[key] : []; 
+  arr.splice(idx, 1); params[key] = arr; renderList(key, arr) 
+}
+
+function renderSubList(parent, key, arr) {
+  const box = document.getElementById(['list', parent === 'output_filter' ? 'of' : (parent === 'interact' ? 'ia' : parent), key].join('_'))
+  box.innerHTML = ''
+  arr.forEach((v, i) => {
+    const row = document.createElement('div')
+    row.className = 'list-item'
+    row.innerHTML = `<input value="${escapeHTML(v || '')}" style="width:250px" /> <button onclick="rmSubItem('${escapeHTML(parent)}','${escapeHTML(key)}', ${i})">删除</button>`
+    box.appendChild(row)
+  })
+}
+function addSubItem(parent, key) {
+  const obj = params[parent] || {}; const arr = Array.isArray(obj[key]) ? obj[key] : []
+  arr.push(''); obj[key] = arr; params[parent] = obj
+  renderSubList(parent, key, arr)
+}
+function rmSubItem(parent, key, idx) {
+  // 删除前确认
+  if (!window.confirm('确认删除该项？')) return;
+  const obj = params[parent] || {}; const arr = Array.isArray(obj[key]) ? obj[key] : []
+  arr.splice(idx, 1); obj[key] = arr; params[parent] = obj
+  renderSubList(parent, key, arr)
+}
+
+function renderAutoInteractions(list) {
+  const box = document.getElementById('list_ia_auto_interactions')
+  box.innerHTML = ''
+  list.forEach((o, i) => {
+    const row = document.createElement('div')
+    row.className = 'list-item'
+    const eo = (o && o.except_output) || ''
+    const cs = (o && o.command_auto_send) || ''
+    row.innerHTML = `<label>except_output</label><input value="${escapeHTML(eo)}" style="width:240px" />
+                     <label>command_auto_send</label><input value="${escapeHTML(cs)}" style="width:160px" />
+                     <button onclick="rmAutoInteraction(${i})">删除</button>`
+    box.appendChild(row)
+  })
+}
+function addAutoInteraction() {
+  const ia = params.interact || {}; const list = Array.isArray(ia.auto_interactions) ? ia.auto_interactions : []
+  list.push({ except_output: '', command_auto_send: '' }); ia.auto_interactions = list; params.interact = ia
+  renderAutoInteractions(list)
+}
+function rmAutoInteraction(idx) {
+  // 删除前确认
+  if (!window.confirm('确认删除该自动交互？')) return;
+  const ia = params.interact || {}; const list = Array.isArray(ia.auto_interactions) ? ia.auto_interactions : []
+  list.splice(idx, 1); ia.auto_interactions = list; params.interact = ia
+  renderAutoInteractions(list)
+}
+
+function collectForm() {
+  const toBool = (id) => { const v = document.getElementById(id).value; return v === '' ? undefined : (v === 'true') }
+  const num = (id) => { const v = document.getElementById(id).value; return v === '' ? undefined : Number(v) }
+
+  params.enable_required = toBool('p_enable_required')
+  params.enable_cli = (document.getElementById('p_enable_cli').value || '').trim() || undefined
+  params.enable_except_output = (document.getElementById('p_enable_except_output').value || '').trim() || undefined
+  params.config_exit_cli = (document.getElementById('p_config_exit_cli').value || '').trim() || undefined
+  params.skip_delayed_echo = toBool('p_skip_delayed_echo')
+
+  const readList = (key) => {
+    const box = document.getElementById('list_' + key)
+    const inputs = box.querySelectorAll('input')
+    const arr = []; inputs.forEach(i => { const v = i.value.trim(); if (v) arr.push(v) })
+    return arr.length ? arr : undefined
+  }
+  params.prompt_suffixes = readList('prompt_suffixes')
+  params.disable_paging_cmds = readList('disable_paging_cmds')
+  params.config_mode_clis = readList('config_mode_clis')
+
+  const readSub = (prefix, key) => {
+    const id = ['list', prefix === 'output_filter' ? 'of' : (prefix === 'interact' ? 'ia' : prefix), key].join('_')
+    const box = document.getElementById(id)
+    const inputs = box.querySelectorAll('input')
+    const arr = []; inputs.forEach(i => { const v = i.value.trim(); if (v) arr.push(v) })
+    return arr.length ? arr : undefined
+  }
+  const of = params.output_filter || {}
+  of.case_insensitive = toBool('of_case')
+  of.trim_space = toBool('of_trim')
+  of.prefixes = readSub('output_filter','prefixes')
+  of.contains = readSub('output_filter','contains')
+  params.output_filter = of
+
+  const ia = params.interact || {}
+  ia.case_insensitive = toBool('ia_case')
+  ia.trim_space = toBool('ia_trim')
+  // auto_interactions 读取
+  const aiBox = document.getElementById('list_ia_auto_interactions')
+  const rows = aiBox.querySelectorAll('.list-item')
+  const list = []
+  rows.forEach(row => {
+    const inputs = row.querySelectorAll('input')
+    const eo = inputs[0].value.trim(); const cs = inputs[1].value.trim()
+    if (eo || cs) list.push({ except_output: eo, command_auto_send: cs })
+  })
+  ia.auto_interactions = list.length ? list : undefined
+  ia.error_hints = readSub('interact','error_hints')
+  params.interact = ia
+
+  const toObj = params.timeout || {}
+  const tio = toObj.interact_timeout || {}
+  toObj.timeout_all = num('to_all')
+  toObj.dial_timeout = num('to_dial')
+  toObj.auth_timeout = num('to_auth')
+  tio.command_interval_ms = num('to_cmd_interval')
+  tio.command_timeout_sec = num('to_cmd_timeout')
+  tio.quiet_after_ms = num('to_quiet_after')
+  tio.quiet_poll_interval_ms = num('to_quiet_poll')
+  tio.prompt_inducer_interval_ms = num('to_pi_interval')
+  tio.prompt_inducer_max_count = num('to_pi_max')
+  tio.exit_pause_ms = num('to_exit_pause')
+  tio.enable_password_fallback_ms = num('to_enable_fallback')
+  toObj.interact_timeout = tio
+  params.timeout = toObj
+}
+
+function saveParams() {
+  if (!current) { window.alert('请先选择平台'); return }
+  collectForm()
+  api(`/api/v1/ssh-adapter/platforms/${current.id}/params`, { method: 'PUT', body: JSON.stringify(params) })
+    .then(res => {
+      if (res.code !== 'SUCCESS') throw new Error(res.message)
+      document.getElementById('saveHint').textContent = '参数已保存'
+      setTimeout(() => document.getElementById('saveHint').textContent = '', 2000)
+      loadPlatforms()
+    })
+    .catch(notifyError)
+}
+
+function saveMeta() {
+  if (!current) { window.alert('请先选择平台'); return }
+  const body = {
+    vendor: document.getElementById('cur_vendor').value.trim(),
+    system: document.getElementById('cur_system').value.trim(),
+    remark: document.getElementById('cur_remark').value.trim(),
+  }
+  api(`/api/v1/ssh-adapter/platforms/${current.id}`, { method: 'PUT', body: JSON.stringify(body) })
+    .then(res => {
+      if (res.code !== 'SUCCESS') throw new Error(res.message)
+      loadPlatforms()
+    })
+    .catch(notifyError)
+}
+
+function delPlatform(id) {
+  const p = platforms.find(x => x.id === id)
+  if (p && p.ssh_type === 'default') { window.alert('default 类型不可删除'); return }
+  if (!window.confirm('确认删除该平台？')) return
+  api(`/api/v1/ssh-adapter/platforms/${id}`, { method: 'DELETE' })
+    .then(res => {
+      if (res.code !== 'SUCCESS') throw new Error(res.message)
+      if (current && current.id === id) { current = null; document.getElementById('editBox').style.display = 'none' }
+      loadPlatforms()
+    })
+    .catch(notifyError)
+}
+
+function previewYAML() {
+  if (!current) { window.alert('请先选择平台'); return }
+  collectForm() // 先收集当前表单，避免预览与保存不一致
+  // 临时预览不写库，调用后端生成逻辑（基于params）
+  // 为简化，这里先保存后再预览，保证一致性
+  api(`/api/v1/ssh-adapter/platforms/${current.id}/params`, { method: 'PUT', body: JSON.stringify(params) })
+    .then(_ => api(`/api/v1/ssh-adapter/platforms/${current.id}/yaml`))
+    .then(res => {
+      if (res.code !== 'SUCCESS') throw new Error(res.message)
+      const box = document.getElementById('yamlPreview')
+      box.textContent = (res.data && res.data.yaml) || ''
+      box.style.display = ''
+    })
+    .catch(notifyError)
+}
+
+function generateYAML() {
+  api('/api/v1/ssh-adapter/generate', { method: 'POST' })
+    .then(res => {
+      if (res.code !== 'SUCCESS') throw new Error(res.message)
+      window.alert('YAML 已生成: ' + (res.data && res.data.path || 'configs/auto-ssh.yaml'))
+    })
+    .catch(notifyError)
+}
+
+function escapeHTML(s) { 
+  if (s == null || s === undefined) return ''
+  return ('' + s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) 
+}
+
+// 初始化
+loadPlatforms()
+</script>
+</body>
+</html>

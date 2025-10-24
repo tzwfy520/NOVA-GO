@@ -71,6 +71,8 @@ coverage.html
 deploy/
 .*/config.yaml
 .*/dev.yaml
+
+
 .*/prod.yaml    
 binaryfile/
 # Data

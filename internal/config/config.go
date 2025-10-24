@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"path/filepath"
 
 	"github.com/spf13/viper"
 )
@@ -244,6 +245,12 @@ func Load(configPath string) (*Config, error) {
 	// 环境变量替换
 	config = replaceEnvVars(config)
 
+	// 读取 auto-ssh.yaml 的设备平台默认项并覆盖
+	autoPath := filepath.Join("configs", "auto-ssh.yaml")
+	if dd, err := loadAutoSSHDeviceDefaults(autoPath); err == nil && len(dd) > 0 {
+		config.Collector.DeviceDefaults = dd
+	}
+
 	// 应用并发档位配置（若设置了 concurrency_profile 则覆盖 concurrent 数值）
 	applyConcurrencyProfile(&config)
 
@@ -409,73 +416,95 @@ func applyConcurrencyProfile(cfg *Config) {
 		}
 	}
 
-	if profCfg, ok := mapping[p]; ok {
-		if profCfg.Concurrent > 0 {
-			cfg.Collector.Concurrent = profCfg.Concurrent
+	// 应用档位配置（若存在映射）
+	if profConf, ok := mapping[strings.ToUpper(p)]; ok {
+		if profConf.Concurrent > 0 {
+			cfg.Collector.Concurrent = profConf.Concurrent
 		}
-		if profCfg.Threads > 0 {
-			cfg.Collector.Threads = profCfg.Threads
+		if profConf.Threads > 0 {
+			cfg.Collector.Threads = profConf.Threads
 		}
 	}
 }
 
-// GetServerAddr 获取服务器地址
+// 从 auto-ssh.yaml 加载设备平台默认项（collector.device_defaults 或顶层 device_defaults）
+func loadAutoSSHDeviceDefaults(path string) (map[string]PlatformDefaultsConfig, error) {
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+	if err := v.ReadInConfig(); err != nil {
+		return nil, err
+	}
+	type collectorWrapper struct {
+		DeviceDefaults map[string]PlatformDefaultsConfig `mapstructure:"device_defaults"`
+	}
+	var root struct {
+		Collector      collectorWrapper                    `mapstructure:"collector"`
+		DeviceDefaults map[string]PlatformDefaultsConfig   `mapstructure:"device_defaults"`
+	}
+	if err := v.Unmarshal(&root); err != nil {
+		return nil, err
+	}
+	if len(root.Collector.DeviceDefaults) > 0 {
+		return root.Collector.DeviceDefaults, nil
+	}
+	if len(root.DeviceDefaults) > 0 {
+		return root.DeviceDefaults, nil
+	}
+	return nil, fmt.Errorf("device_defaults not found in %s", path)
+}
+
+// GetServerAddr 获取服务器地址（Host+Port）
 func (c *Config) GetServerAddr() string {
+	if strings.TrimSpace(c.Server.Host) == "" {
+		return fmt.Sprintf(":%d", c.Server.Port)
+	}
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
 }
 
-// GetTimeoutAll 获取设备的全局超时配置（秒）
-// 平台特定配置优先级高于全局配置
+// GetTimeoutAll 获取某个平台的总超时（若平台未定义则返回全局默认）
 func (c *Config) GetTimeoutAll(platform string) int {
-	// 首先检查平台特定配置
 	if platform != "" {
-		if platformConfig, exists := c.Collector.DeviceDefaults[platform]; exists {
-			if platformConfig.Timeout.TimeoutAll > 0 {
-				return platformConfig.Timeout.TimeoutAll
+		if def, ok := c.Collector.DeviceDefaults[platform]; ok {
+			if def.Timeout.TimeoutAll > 0 {
+				return def.Timeout.TimeoutAll
 			}
 		}
 	}
-	
-	// 使用全局配置（转换为秒）
+	// 若平台未定义或未设置，返回全局默认
 	if c.SSH.Timeout > 0 {
-		return int(c.SSH.Timeout.Seconds())
+		return int(c.SSH.Timeout / time.Second)
 	}
-	
-	// 默认值
+	if c.SSH.ConnectTimeout > 0 {
+		return int(c.SSH.ConnectTimeout / time.Second)
+	}
+	// 若均未设置，返回默认 60s
 	return 60
 }
 
-// OutputFilterConfig 输出过滤器配置
+// OutputFilterConfig 输出过滤配置
 type OutputFilterConfig struct {
-	// Prefixes: 移除以这些字符串开头的行（例如分页提示 "---- More ----" 或纯 more 行）
-	Prefixes []string `mapstructure:"prefixes"`
-	// Contains: 移除包含这些子串的行（例如 Cisco 的 "--more--"）
-	Contains []string `mapstructure:"contains"`
-	// CaseInsensitive: 忽略大小写匹配（默认启用）
-	CaseInsensitive bool `mapstructure:"case_insensitive"`
-	// TrimSpace: 过滤后再移除首尾空格（默认启用）
-	TrimSpace bool `mapstructure:"trim_space"`
+	Prefixes       []string `mapstructure:"prefixes"`
+	Contains       []string `mapstructure:"contains"`
+	CaseInsensitive bool    `mapstructure:"case_insensitive"`
+	TrimSpace       bool    `mapstructure:"trim_space"`
 }
 
-// InteractConfig 交互配置（针对设备交互行为的过滤与提示匹配）
+// InteractConfig 交互配置（提示符、自动交互与错误提示）
 type InteractConfig struct {
-	// AutoInteractions: 自动交互配置（遇到输出提示时自动发送命令）
 	AutoInteractions []AutoInteractionConfig `mapstructure:"auto_interactions"`
-	// ErrorHints: 错误提示前缀（命令错误或无效提示）
-	ErrorHints []string `mapstructure:"error_hints"`
-	// CaseInsensitive: 错误提示匹配忽略大小写（默认启用）
-	CaseInsensitive bool `mapstructure:"case_insensitive"`
-	// TrimSpace: 匹配前移除首尾空格（默认启用）
-	TrimSpace bool `mapstructure:"trim_space"`
+	ErrorHints       []string                `mapstructure:"error_hints"`
+	CaseInsensitive  bool                    `mapstructure:"case_insensitive"`
+	TrimSpace        bool                    `mapstructure:"trim_space"`
 }
 
-// AutoInteractionConfig 自动交互项
+// AutoInteractionConfig 自动交互配置（提示输出匹配与自动下发）
 type AutoInteractionConfig struct {
 	ExpectOutput string `mapstructure:"except_output"`
 	AutoSend     string `mapstructure:"command_auto_send"`
 }
 
-// InteractTimingConfig 平台交互时序与节奏参数（可嵌套于 platform.timeout.interact_timeout）
+// InteractTimingConfig 交互时序相关配置（毫秒与秒，以平台覆盖全局）
 type InteractTimingConfig struct {
 	CommandIntervalMS        int `mapstructure:"command_interval_ms"`
 	CommandTimeoutSec        int `mapstructure:"command_timeout_sec"`
@@ -487,42 +516,42 @@ type InteractTimingConfig struct {
 	ExitPauseMS              int `mapstructure:"exit_pause_ms"`
 }
 
-// PlatformTimeoutConfig 平台层 timeout 嵌套块（兼容全局结构）
+// PlatformTimeoutConfig 平台超时配置（与全局 SSH 超时合并使用）
 type PlatformTimeoutConfig struct {
-	TimeoutAll     int                 `mapstructure:"timeout_all"`     // 改为int类型（秒）
-	DialTimeoutSec int                 `mapstructure:"dial_timeout"`
-	AuthTimeoutSec int                 `mapstructure:"auth_timeout"`
+	TimeoutAll     int                  `mapstructure:"timeout_all"`     // 改为int类型（秒）
+	DialTimeoutSec int                  `mapstructure:"dial_timeout"`
+	AuthTimeoutSec int                  `mapstructure:"auth_timeout"`
 	Interact       InteractTimingConfig `mapstructure:"interact_timeout"`
 }
 
-// PlatformDefaultsConfig 平台默认交互配置（提示符、分页、enable 与自动交互）
+// PlatformDefaultsConfig 平台默认交互/适配参数
 type PlatformDefaultsConfig struct {
-    PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
-    DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
-    AutoInteractions  []AutoInteractionConfig `mapstructure:"auto_interactions"`
-    ErrorHints        []string                `mapstructure:"error_hints"`
-    SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
-    EnableRequired    bool                    `mapstructure:"enable_required"`
-    // OutputFilter：平台级输出过滤（与全局 collector.output_filter 合并或覆盖）
-    OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
-    // Interact: 平台级交互配置（错误提示匹配）
-    Interact InteractConfig `mapstructure:"interact"`
-    // Enable/Sudo 提权命令与提示匹配
-    EnableCLI          string `mapstructure:"enable_cli"`
-    EnableExceptOutput string `mapstructure:"enable_except_output"`
-    // 进入配置模式命令（按序尝试）
-    ConfigModeCLIs []string `mapstructure:"config_mode_clis"`
-    // 退出配置模式命令（新增）
-    ConfigExitCLI string `mapstructure:"config_exit_cli"`
-    // 新增：交互时序与节奏参数（旧直出字段，仍保留以兼容老配置）
-    CommandIntervalMS         int `mapstructure:"command_interval_ms"`
-    CommandTimeoutSec         int `mapstructure:"command_timeout_sec"`
-    QuietAfterMS              int `mapstructure:"quiet_after_ms"`
-    QuietPollIntervalMS       int `mapstructure:"quiet_poll_interval_ms"`
-    EnablePasswordFallbackMS  int `mapstructure:"enable_password_fallback_ms"`
-    PromptInducerIntervalMS   int `mapstructure:"prompt_inducer_interval_ms"`
-    PromptInducerMaxCount     int `mapstructure:"prompt_inducer_max_count"`
-    ExitPauseMS               int `mapstructure:"exit_pause_ms"`
-    // 新增：平台层嵌套 timeout（结构与全局 ssh.timeout 一致）
-    Timeout PlatformTimeoutConfig `mapstructure:"timeout"`
+	PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
+	DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
+	AutoInteractions  []AutoInteractionConfig `mapstructure:"auto_interactions"`
+	ErrorHints        []string                `mapstructure:"error_hints"`
+	SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
+	EnableRequired    bool                    `mapstructure:"enable_required"`
+
+	OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
+
+	Interact InteractConfig `mapstructure:"interact"`
+
+	EnableCLI          string `mapstructure:"enable_cli"`
+	EnableExceptOutput string `mapstructure:"enable_except_output"`
+
+	ConfigModeCLIs []string `mapstructure:"config_mode_clis"`
+
+	ConfigExitCLI string `mapstructure:"config_exit_cli"`
+
+	CommandIntervalMS         int `mapstructure:"command_interval_ms"`
+	CommandTimeoutSec         int `mapstructure:"command_timeout_sec"`
+	QuietAfterMS              int `mapstructure:"quiet_after_ms"`
+	QuietPollIntervalMS       int `mapstructure:"quiet_poll_interval_ms"`
+	EnablePasswordFallbackMS  int `mapstructure:"enable_password_fallback_ms"`
+	PromptInducerIntervalMS   int `mapstructure:"prompt_inducer_interval_ms"`
+	PromptInducerMaxCount     int `mapstructure:"prompt_inducer_max_count"`
+	ExitPauseMS               int `mapstructure:"exit_pause_ms"`
+
+	Timeout PlatformTimeoutConfig `mapstructure:"timeout"`
 }

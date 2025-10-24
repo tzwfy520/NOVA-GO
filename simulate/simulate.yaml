@@ -7,8 +7,12 @@ namespace:
     port: 22001
     idle_seconds: 180
     max_conn: 5
-  test-user:
+  test-user-02:
     port: 22002
+    idle_seconds: 180
+    max_conn: 5
+  test-user-01:
+    port: 22003
     idle_seconds: 180
     max_conn: 5
 

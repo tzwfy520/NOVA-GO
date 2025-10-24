@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>模拟服务</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/css/nav.css" />
+  <script src="/static/js/nav.js" defer></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 20px; }
+    h1 { font-size: 20px; }
+    input, textarea { padding: 6px; margin: 4px 0; }
+    button { padding: 6px 12px; margin-right: 8px; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; margin-top: 8px; }
+    th, td { border: none; border-bottom: 1px solid #eef2f7; padding: 8px; text-align: left; }
+    thead th { background: #fafafa; font-weight: 600; }
+    tbody tr:hover { background: #f9fbff; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .muted { color: #666; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { border: 1px solid #f0f2f5; border-radius: 10px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    .section-title { font-size: 15px; font-weight: 600; margin: 6px 0; }
+    pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <div class="card">
+
+    <div class="card" style="margin-top:8px;">
+      <div class="section-title">模拟端口</div>
+      <div class="row">
+        <button onclick="addNamespace()">新增</button>
+        <span class="muted">端口范围：22001–22099；超时时间默认 180 秒；最大连接默认 5</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>端口</th><th>namespace</th><th>超时时间(秒)</th><th>最大连接</th><th>启用</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="nsTbody"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <div class="section-title">模拟类型</div>
+      <div class="row">
+        <button onclick="addDeviceType()">新增</button>
+        <span class="muted">特权模式：true/false</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>模拟设备类型</th><th>用户模式后缀</th><th>特权模式</th><th>特权模式后缀</th><th>配置模式后缀</th><th>启用</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="dtTbody"></tbody>
+      </table>
+    </div>
+
+    <!-- 新增：模拟设备表格 -->
+    <div class="card" style="margin-top:16px;">
+      <div class="section-title">模拟设备</div>
+      <div class="row">
+        <button onclick="addDeviceName()">新增</button>
+        <span class="muted">为设备选择类型（来源于上方“模拟类型”）；设备名称唯一。</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>设备名称</th><th>设备类型</th><th>启用</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="dnTbody"></tbody>
+      </table>
+    </div>
+
+
+    <div class="row" style="margin-top:16px;">
+      <button class="primary" onclick="generateYAML()">生成 simulate-auto.yaml</button>
+      <span class="muted" id="saveHint"></span>
+    </div>
+  </div>
+
+  <script>
+    let nsList = []
+    let dtList = []
+    // 新增：设备名称列表
+    let dnList = []
+
+    function renderNamespaces(){
+      const tbody = document.getElementById('nsTbody')
+      tbody.innerHTML = ''
+      nsList.forEach((ns, idx) => {
+        const tr = document.createElement('tr')
+        const isDefault = (ns.name === 'default')
+        tr.innerHTML = `
+          <td>${idx+1}</td>
+          <td><input type="number" min="22001" max="22099" value="${ns.port||''}" oninput="onNsInput(${idx},'port',this.value)" style="width:120px" /></td>
+          <td><input value="${escapeAttr(ns.name||'')}" oninput="onNsInput(${idx},'name',this.value)" ${isDefault?'disabled':''} /></td>
+          <td><input type="number" value="${ns.idle_seconds??180}" oninput="onNsInput(${idx},'idle_seconds',this.value)" style="width:120px" /></td>
+          <td><input type="number" value="${ns.max_conn??5}" oninput="onNsInput(${idx},'max_conn',this.value)" style="width:100px" /></td>
+          <td><button onclick="toggleNs(${idx})">${ns.enabled?'禁用':'启用'}</button></td>
+          <td>${isDefault?'<span class="muted">不可删除</span>':`<button onclick="delNs(${idx})">删除</button>`}</td>
+        `
+        tbody.appendChild(tr)
+      })
+    }
+    function onNsInput(i, key, val){
+      if (key==='name' && nsList[i] && nsList[i].name === 'default') { return }
+      if (key==='port'){ val = parseInt(val,10)||0 }
+      if (key==='idle_seconds' || key==='max_conn'){ val = parseInt(val,10)||0 }
+      nsList[i][key] = val
+    }
+    function toggleNs(i){ nsList[i].enabled = !nsList[i].enabled; renderNamespaces() }
+    function delNs(i){
+      if (nsList[i] && nsList[i].name === 'default') { alert('默认命名空间不可删除'); return }
+      // 删除前确认
+      if (!confirm('确认删除该命名空间？')) return;
+      nsList.splice(i,1); renderNamespaces()
+    }
+    function addNamespace(){
+      const p = 22001 + nsList.length
+      nsList.push({ port: p>22099?22099:p, name: nsList.length===0?'default':'ns-'+(nsList.length+1), idle_seconds: 180, max_conn: 5, enabled: true })
+      renderNamespaces()
+    }
+
+    function renderDeviceTypes(){
+      const tbody = document.getElementById('dtTbody')
+      tbody.innerHTML = ''
+      dtList.forEach((d, idx) => {
+        const tr = document.createElement('tr')
+        tr.innerHTML = `
+          <td>${idx+1}</td>
+          <td><input value="${escapeAttr(d.type||'')}" oninput="onDtInput(${idx},'type',this.value)" /></td>
+          <td><input value="${escapeAttr(d.prompt_suffixe||'')}" oninput="onDtInput(${idx},'prompt_suffixe',this.value)" /></td>
+          <td>
+            <select onchange="onDtInput(${idx},'enable_mode_required',this.value)">
+              <option value="true"${d.enable_mode_required?' selected':''}>true</option>
+              <option value="false"${!d.enable_mode_required?' selected':''}>false</option>
+            </select>
+          </td>
+          <td><input value="${escapeAttr(d.enable_mode_suffixe||'')}" oninput="onDtInput(${idx},'enable_mode_suffixe',this.value)" /></td>
+          <td><input value="${escapeAttr(d.config_mode_suffixe||'')}" oninput="onDtInput(${idx},'config_mode_suffixe',this.value)" /></td>
+          <td><button onclick="toggleDt(${idx})">${d.enabled?'禁用':'启用'}</button></td>
+          <td><button onclick="delDt(${idx})">删除</button></td>
+        `
+        tbody.appendChild(tr)
+      })
+    }
+    function onDtInput(i, key, val){
+      if (key==='enable_mode_required'){ dtList[i][key] = (val==='true') }
+      else { dtList[i][key] = val }
+    }
+    function toggleDt(i){ dtList[i].enabled = !dtList[i].enabled; renderDeviceTypes() }
+    function delDt(i){
+      // 删除前确认
+      if (!confirm('确认删除该设备类型？')) return;
+      dtList.splice(i,1); renderDeviceTypes()
+    }
+    function addDeviceType(){
+      dtList.push({ type:'', prompt_suffixe:'>', enable_mode_required:false, enable_mode_suffixe:'#', config_mode_suffixe:'', enabled:true })
+      renderDeviceTypes()
+    }
+
+    // 新增：设备类型选项聚合（来自模拟类型或内置）
+    function getDeviceTypeOptions(){
+      const set = new Set()
+      dtList.forEach(d => { if (d.type) set.add(d.type) })
+      return Array.from(set)
+    }
+
+    // 新增：渲染设备名称映射
+    function renderDeviceNames(){
+      const tbody = document.getElementById('dnTbody')
+      tbody.innerHTML = ''
+      const opts = getDeviceTypeOptions()
+      dnList.forEach((d, idx) => {
+        const tr = document.createElement('tr')
+        const optionHTML = opts.map(t => `<option value="${escapeAttr(t)}"${d.device_type===t?' selected':''}>${escapeAttr(t)}</option>`).join('')
+        tr.innerHTML = `
+          <td>${idx+1}</td>
+          <td><input value="${escapeAttr(d.name||'')}" oninput="onDnInput(${idx},'name',this.value)" /></td>
+          <td><select onchange="onDnInput(${idx},'device_type',this.value)">${optionHTML}</select></td>
+          <td><button onclick="toggleDn(${idx})">${d.enabled?'禁用':'启用'}</button></td>
+          <td><button onclick="gotoSimData(${idx})">查看</button><button onclick="delDn(${idx})">删除</button></td>
+        `
+        tbody.appendChild(tr)
+      })
+    }
+    function onDnInput(i, key, val){ dnList[i][key] = val }
+    function toggleDn(i){ dnList[i].enabled = !dnList[i].enabled; renderDeviceNames() }
+    function delDn(i){
+      // 删除前确认
+      if (!confirm('确认删除该设备名称？')) return;
+      dnList.splice(i,1); renderDeviceNames()
+    }
+    function addDeviceName(){ dnList.push({ name:'', device_type:getDeviceTypeOptions()[0]||'', enabled:true }); renderDeviceNames() }
+
+    function escapeAttr(s){ return String(s||'').replace(/['"]/g, c => (c==='"'?'&quot;':'&#39;')) }
+
+    async function loadConfig(){
+      try {
+        const r = await fetch('/api/v1/simulate/config')
+        const data = await r.json()
+        const d = data && data.data
+        if (d && Array.isArray(d.namespaces)){ nsList = d.namespaces.map(x => Object.assign({enabled:true}, x)) }
+        if (d && Array.isArray(d.device_types)){ dtList = d.device_types.map(x => Object.assign({enabled:true}, x)) }
+        // 新增：加载设备名称映射
+        if (d && Array.isArray(d.device_names)){ dnList = d.device_names.map(x => Object.assign({enabled:true}, x)) }
+      } catch (e) {
+        nsList = [{ port: 22001, name: 'default', idle_seconds: 180, max_conn: 5, enabled: true }]
+        dtList = []
+        dnList = []
+      }
+      ensureDefault()
+      renderNamespaces(); renderDeviceTypes(); renderDeviceNames()
+    }
+
+    function ensureDefault(){
+      if (!nsList.some(x => x.name === 'default')) {
+        nsList.unshift({ port: 22001, name: 'default', idle_seconds: 180, max_conn: 5, enabled: true })
+      }
+    }
+
+    function collectYAML(){
+      for (const ns of nsList) {
+        if (!ns.enabled) continue
+        if (!ns.name || !ns.port){ throw new Error('命名空间与端口必填') }
+        if (ns.port < 22001 || ns.port > 22099){ throw new Error('端口需在 22001-22099 范围') }
+      }
+      for (const d of dtList) {
+        if (!d.enabled) continue
+        if (!d.type || !d.prompt_suffixe){ throw new Error('设备类型与用户模式后缀必填') }
+      }
+      // 新增：校验设备名称映射
+      const nameSet = new Set()
+      for (const dn of dnList) {
+        if (!dn.enabled) continue
+        if (!dn.name || !dn.device_type){ throw new Error('设备名称与设备类型必填') }
+        const key = String(dn.name)
+        if (nameSet.has(key)) { throw new Error('设备名称不可重复') }
+        nameSet.add(key)
+      }
+
+      const namespace = {}
+      nsList.filter(x=>x.enabled).forEach(x => {
+        namespace[x.name] = { port: Number(x.port), idle_seconds: Number(x.idle_seconds||180), max_conn: Number(x.max_conn||5) }
+      })
+      const device_type = {}
+      dtList.filter(x=>x.enabled).forEach(x => {
+        const o = { prompt_suffixe: String(x.prompt_suffixe||''), enable_mode_required: !!x.enable_mode_required }
+        if (x.enable_mode_suffixe) o.enable_mode_suffixe = String(x.enable_mode_suffixe)
+        if (x.config_mode_suffixe) o.config_mode_suffixe = String(x.config_mode_suffixe)
+        device_type[x.type] = o
+      })
+      // 新增：生成device_name映射
+      const device_name = {}
+      dnList.filter(x=>x.enabled).forEach(x => {
+        device_name[x.name] = { device_type: String(x.device_type||'') }
+      })
+      return { namespace, device_type, device_name }
+    }
+
+    async function generateYAML(){
+      try {
+        const payload = collectYAML()
+        const r = await fetch('/api/v1/simulate/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+        const data = await r.json()
+        if (data.code !== 'SUCCESS') throw new Error(data.message || '生成失败')
+        document.getElementById('saveHint').textContent = '已生成: ' + (data.data && data.data.path || 'simulate/simulate-auto.yaml')
+        alert('生成成功')
+      } catch (e) {
+        alert(e.message || '生成失败')
+      }
+    }
+
+
+    // 新增：从设备名称跳转到模拟数据页面
+    function gotoSimData(i){
+      const dn = dnList && dnList[i]
+      const dev = dn && dn.name ? dn.name : ''
+      const ns = 'default'
+      const url = dev ? `/admin/simulate-data?namespace=${encodeURIComponent(ns)}&device_name=${encodeURIComponent(dev)}` : `/admin/simulate-data?namespace=${encodeURIComponent(ns)}`
+      window.location.href = url
+    }
+
+    // 页面加载后初始化数据
+    loadConfig()
+  </script>
+</body>
+</html>

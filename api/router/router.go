@@ -26,12 +26,33 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 	r.Use(RequestIDMiddleware())
 	r.Use(LoggingMiddleware())
 
+	// 静态资源与管理页入口
+	r.Static("/static", "./web/static")
+	r.GET("/admin", func(c *gin.Context) {
+		c.File("web/admin.html")
+	})
+	// 新增独立功能页面入口
+	r.GET("/admin/collector", func(c *gin.Context) { c.File("web/admin/collector.html") })
+	r.GET("/admin/device-types", func(c *gin.Context) { c.File("web/admin/device_types.html") })
+	r.GET("/admin/devices", func(c *gin.Context) { c.File("web/admin/devices.html") })
+	r.GET("/admin/ssh-adapter", func(c *gin.Context) { c.File("web/admin/ssh_adapter.html") })
+	r.GET("/admin/logs", func(c *gin.Context) { c.File("web/admin/logs.html") })
+	r.GET("/admin/quick-collect", func(c *gin.Context) { c.File("web/admin/quick_collect.html") })
+	r.GET("/admin/simulate", func(c *gin.Context) { c.File("web/admin/simulate.html") })
+	r.GET("/admin/simulate-data", func(c *gin.Context) { c.File("web/admin/simulate_data.html") })
+
 	// 创建处理器
 	collectorHandler := handler.NewCollectorHandler(collectorService)
 	deviceHandler := handler.NewDeviceHandler()
 	backupHandler := handler.NewBackupHandler(backupService)
 	formattedHandler := handler.NewFormattedHandler(formatService)
 	deployHandler := handler.NewDeployHandler(deployService)
+	adminHandler := handler.NewAdminHandler()
+	simCmdHandler := handler.NewSimCmdHandler()
+	simDeviceCmdHandler := handler.NewSimDeviceCmdHandler()
+	logsHandler := handler.NewLogsHandler()
+	sshAdapterHandler := handler.NewSSHAdapterHandler()
+	simulateConfigHandler := handler.NewSimulateConfigHandler()
 
 	// 根路径
 	r.GET("/", func(c *gin.Context) {
@@ -83,6 +104,60 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 
 		// 部署路由
 		v1.POST("/deploy/fast", deployHandler.FastDeploy)
+
+		// 管理路由：设备类型默认参数
+		admin := v1.Group("/admin")
+		{
+			admin.GET("/device-defaults", adminHandler.GetDeviceDefaults)
+			admin.PUT("/device-defaults/:platform", adminHandler.UpdateDeviceDefaults)
+		}
+
+		// SSH适配管理
+		ssh := v1.Group("/ssh-adapter")
+		{
+			ssh.GET("/platforms", sshAdapterHandler.ListPlatforms)
+			ssh.POST("/platforms", sshAdapterHandler.CreatePlatform)
+			ssh.GET("/platforms/:id", sshAdapterHandler.GetPlatform)
+			ssh.PUT("/platforms/:id", sshAdapterHandler.UpdatePlatform)
+			ssh.DELETE("/platforms/:id", sshAdapterHandler.DeletePlatform)
+			ssh.GET("/platforms/:id/params", sshAdapterHandler.GetParams)
+			ssh.PUT("/platforms/:id/params", sshAdapterHandler.UpdateParams)
+			ssh.GET("/platforms/:id/yaml", sshAdapterHandler.GetPlatformYAML)
+			ssh.POST("/generate", sshAdapterHandler.GenerateYAML)
+		}
+
+		// 模拟命令管理
+		sim := v1.Group("/simcmds")
+		{
+			sim.GET("", simCmdHandler.ListSimCmds)
+			sim.POST("", simCmdHandler.CreateSimCmd)
+			sim.PUT("/:id", simCmdHandler.UpdateSimCmd)
+			sim.DELETE("/:id", simCmdHandler.DeleteSimCmd)
+		}
+
+		// 模拟数据（按命名空间与设备）管理
+		simdev := v1.Group("/sim-device-cmds")
+		{
+			simdev.GET("", simDeviceCmdHandler.ListSimDeviceCmds)
+			simdev.POST("", simDeviceCmdHandler.CreateSimDeviceCmd)
+			simdev.GET("/:id", simDeviceCmdHandler.GetSimDeviceCmd)
+			simdev.PUT("/:id", simDeviceCmdHandler.UpdateSimDeviceCmd)
+			simdev.DELETE("/:id", simDeviceCmdHandler.DeleteSimDeviceCmd)
+		}
+
+		// 模拟配置管理
+		simcfg := v1.Group("/simulate-config")
+		{
+			simcfg.GET("", simulateConfigHandler.GetSimulateConfig)
+			simcfg.POST("", simulateConfigHandler.SaveSimulateConfig)
+		}
+
+		// 兼容前端已存在路径：/simulate/config
+		v1.GET("/simulate/config", simulateConfigHandler.GetSimulateConfig)
+		v1.POST("/simulate/config", simulateConfigHandler.SaveSimulateConfig)
+
+		// 日志查询
+		v1.GET("/logs/tail", logsHandler.TailLogs)
 	}
 
 	// 404处理

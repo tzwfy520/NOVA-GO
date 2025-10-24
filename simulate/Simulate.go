@@ -21,6 +21,9 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+	// 新增：数据库优先匹配模拟回显
+	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
 )
 
 // Simulate.yaml 配置结构
@@ -568,6 +571,14 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 }
 
 func (s *namespaceServer) loadCommandOutput(ns, deviceName, cmd string) string {
+	// 新增：优先从 SQLite 按 namespace + device_name + command 精确匹配
+	if db := database.GetDB(); db != nil {
+		var rec model.SimDeviceCommand
+		if err := db.Where("namespace = ? AND device_name = ? AND command = ? AND enabled = 1", ns, deviceName, cmd).First(&rec).Error; err == nil {
+			logger.Debug("Simulate: load out (sqlite)", "ns", ns, "device", deviceName, "cmd", cmd, "id", rec.ID)
+			return ensureCRLF(rec.Output)
+		}
+	}
 	base := filepath.Join("simulate", "namespace", ns, deviceName)
 	// 尝试原命令名称
 	p1 := filepath.Join(base, fmt.Sprintf("%s.txt", cmd))
@@ -728,14 +739,23 @@ func prefixWordMatchCommands(input string, cands []string) []string {
 
 // extractCommandFromPayload 尝试从 exec payload 中提取命令字符串
 func extractCommandFromPayload(payload string) string {
-	// 简化处理：去掉不可见字符，取最后一段
-	s := strings.TrimSpace(strings.ReplaceAll(payload, "\x00", ""))
-	if s == "" {
-		return s
+	// 更稳健的清洗：移除所有不可见ASCII控制字符（0x00-0x1F, 0x7F），保留空格
+	// 并将多重空白压缩为单空格，去除包裹引号
+	if payload == "" { return "" }
+	var sb strings.Builder
+	for _, r := range payload {
+		// 统一将制表/换行/回车等转为空格，用于后续压缩
+		if r == '\t' || r == '\n' || r == '\r' { sb.WriteRune(' '); continue }
+		// 过滤控制字符
+		if r < 32 || r == 127 { continue }
+		sb.WriteRune(r)
 	}
-	// OpenSSH 格式往往包含 "\x00\x00\x00..." 前缀，粗略剥离
-	parts := strings.FieldsFunc(s, func(r rune) bool { return r == '\n' || r == '\r' })
-	return strings.TrimSpace(strings.Join(parts, " "))
+	s := strings.TrimSpace(sb.String())
+	// 压缩多重空白为单空格
+	s = strings.Join(strings.Fields(s), " ")
+	// 去除首尾引号
+	s = strings.Trim(s, "\"'`")
+	return s
 }
 
 func ensureCRLF(s string) string {
