@@ -81,7 +81,8 @@ func InitSQLite(cfg config.SQLiteConfig) error {
 
 // autoMigrate 自动迁移数据库表
 func autoMigrate() error {
-	return db.AutoMigrate(
+	// 先执行模型迁移，创建/更新表结构与索引
+	if err := db.AutoMigrate(
 		&model.Task{},
 		&model.TaskLog{},
 		&model.DeviceInfo{},
@@ -93,7 +94,22 @@ func autoMigrate() error {
 		&model.SimDeviceName{},
 		// 新增：按命名空间与设备的模拟命令
 		&model.SimDeviceCommand{},
-	)
+		// 新增：设备类型管理表
+		&model.DeviceType{},
+		// 新增：采集设置表（保存快速采集的重试与超时）
+		&model.CollectorSettings{},
+	); err != nil {
+		return err
+	}
+
+	// 兼容旧版本：移除 DeviceInfo.IP 的单列唯一索引，改用 ip+port+username 组合唯一
+	_ = db.Migrator().DropIndex(&model.DeviceInfo{}, "ip")
+	// 多尝试几种可能的索引命名，确保旧唯一索引被移除
+	_ = db.Exec("DROP INDEX IF EXISTS idx_device_info_ip;").Error
+	_ = db.Exec("DROP INDEX IF EXISTS device_info_ip;").Error
+	_ = db.Exec("DROP INDEX IF EXISTS uix_device_info_ip;").Error
+
+	return nil
 }
 
 // GetDB 获取数据库实例

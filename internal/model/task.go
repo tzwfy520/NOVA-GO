@@ -61,15 +61,19 @@ func (TaskLog) TableName() string {
 // DeviceInfo 设备信息
 type DeviceInfo struct {
 	ID         string    `json:"id" gorm:"primaryKey;type:varchar(64)"`
-	IP         string    `json:"ip" gorm:"type:varchar(64);not null;uniqueIndex"`
-	Port       int       `json:"port" gorm:"not null;default:22"`
+	Name       string    `json:"name" gorm:"type:varchar(64)"`
+	IP         string    `json:"ip" gorm:"type:varchar(64);not null;uniqueIndex:idx_ip_port_username"`
+	Port       int       `json:"port" gorm:"not null;default:22;uniqueIndex:idx_ip_port_username"`
 	DeviceType string    `json:"device_type" gorm:"type:varchar(32)"`
 	Vendor     string    `json:"vendor" gorm:"type:varchar(64)"`
 	Model      string    `json:"model" gorm:"type:varchar(64)"`
 	Version    string    `json:"version" gorm:"type:varchar(64)"`
-	Username   string    `json:"username" gorm:"type:varchar(64)"`
+	Username   string    `json:"username" gorm:"type:varchar(64);uniqueIndex:idx_ip_port_username"`
 	Password   string    `json:"password" gorm:"type:varchar(256)"`
+	EnablePassword string `json:"enable_password" gorm:"type:varchar(256)"`
+	Enabled    bool      `json:"enabled" gorm:"not null;default:true"`
 	Status     string    `json:"status" gorm:"type:varchar(16);default:'unknown'"`
+	Remarks    string    `json:"remarks" gorm:"type:text"`
 	LastCheck  time.Time `json:"last_check"`
 	CreatedAt  time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt  time.Time `json:"updated_at" gorm:"autoUpdateTime"`

@@ -11,6 +11,10 @@ import (
 	"github.com/sshcollectorpro/sshcollectorpro/internal/service"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 	"golang.org/x/sync/errgroup"
+	// 新增导入
+	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
+	"gorm.io/gorm"
 )
 
 // CollectorHandler 采集器处理器
@@ -30,6 +34,94 @@ func NewCollectorHandler(collectorService *service.CollectorService) *CollectorH
 // @Description 通过SSH连接设备并执行指定命令
 // @Tags collector
 // 单设备接口已移除；请使用 /api/v1/collector/batch/custom 或 /api/v1/collector/batch/system
+
+// FastCollect 快速采集（不记录任务，仅返回日志）
+// @Summary 快速采集设备信息（不进行任务记录）
+// @Description 通过SSH快速连接设备并执行命令，仅返回日志与输出，不写任务记录
+// @Tags collector
+// @Accept json
+// @Produce json
+// @Param request body FastCollectRequest true "快速采集请求"
+// @Success 200 {object} map[string]interface{} "快速采集结果"
+// @Failure 400 {object} ErrorResponse "请求参数错误"
+// @Failure 500 {object} ErrorResponse "服务器内部错误"
+// @Router /api/v1/collector/fast [post]
+type FastCollectRequest struct {
+	DeviceIP        string   `json:"device_ip"`
+	DevicePort      int      `json:"device_port,omitempty"`
+	DeviceName      string   `json:"device_name,omitempty"`
+	DevicePlatform  string   `json:"device_platform,omitempty"`
+	CollectProtocol string   `json:"collect_protocol,omitempty"`
+	RetryFlag       *int     `json:"retry_flag,omitempty"`
+	Timeout         *int     `json:"timeout,omitempty"`       // 兼容示例中的 timeout
+	TaskTimeout     *int     `json:"task_timeout,omitempty"`  // 同义字段
+	UserName        string   `json:"user_name"`
+	Password        string   `json:"password"`
+	EnablePassword  string   `json:"enable_password,omitempty"`
+	CliList         []string `json:"cli_list"`
+	DeviceTimeout   *int     `json:"device_timeout,omitempty"`
+}
+
+func (h *CollectorHandler) FastCollect(c *gin.Context) {
+	var req FastCollectRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "请求参数无效: " + err.Error()})
+		return
+	}
+
+	// 组装服务层请求，兼容 timeout / task_timeout
+	var effTimeout *int
+	if req.Timeout != nil && *req.Timeout > 0 {
+		effTimeout = req.Timeout
+	} else if req.TaskTimeout != nil && *req.TaskTimeout > 0 {
+		effTimeout = req.TaskTimeout
+	}
+	// 默认协议为 ssh
+	proto := strings.TrimSpace(strings.ToLower(req.CollectProtocol))
+	if proto == "" { proto = "ssh" }
+
+	r := service.CollectRequest{
+		TaskID:          fmt.Sprintf("fast-%d", time.Now().UnixNano()),
+		CollectOrigin:   "fast",
+		DeviceIP:        req.DeviceIP,
+		Port:            req.DevicePort,
+		DeviceName:      req.DeviceName,
+		DevicePlatform:  req.DevicePlatform,
+		CollectProtocol: proto,
+		UserName:        req.UserName,
+		Password:        req.Password,
+		EnablePassword:  req.EnablePassword,
+		CliList:         req.CliList,
+		RetryFlag:       req.RetryFlag,
+		TaskTimeout:     effTimeout,
+		DeviceTimeout:   req.DeviceTimeout,
+		Metadata:        map[string]interface{}{ "collect_mode": "fast" },
+	}
+
+	// 参数校验
+	if err := h.validateCollectRequest(&r); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: err.Error()})
+		return
+	}
+
+	// 调用采集服务：服务层已暂停任务写库；任务上下文在执行后移除，不保留记录
+	resp, err := h.collectorService.ExecuteTask(c.Request.Context(), &r)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Code: "EXEC_FAILED", Message: err.Error()})
+		return
+	}
+
+	// 返回结果，关闭HTML转义以保留原始设备输出
+	c.Header("Content-Type", "application/json")
+	c.Status(http.StatusOK)
+	enc := json.NewEncoder(c.Writer)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(gin.H{
+		"code":    "SUCCESS",
+		"message": "快速采集完成",
+		"data":    resp,
+	})
+}
 
 // GetTaskStatus 获取任务状态
 // @Summary 获取任务执行状态
@@ -675,4 +767,66 @@ type SuccessResponse struct {
 	Code    string      `json:"code"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
+}
+
+// GetCollectorSettings 获取快速采集设置（sqlite）
+func (h *CollectorHandler) GetCollectorSettings(c *gin.Context) {
+	db := database.GetDB()
+	var s model.CollectorSettings
+	if err := db.First(&s, 1).Error; err != nil {
+		// 无记录时返回默认值
+		c.JSON(http.StatusOK, gin.H{
+			"code":    "SUCCESS",
+			"message": "获取设置成功",
+			"data": gin.H{
+				"retry_flag": 0,
+				"timeout":    30,
+			},
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    "SUCCESS",
+		"message": "获取设置成功",
+		"data": gin.H{
+			"retry_flag": s.RetryFlag,
+			"timeout":    s.Timeout,
+		},
+	})
+}
+
+// UpdateCollectorSettings 保存快速采集设置（sqlite）
+type UpdateCollectorSettingsRequest struct {
+	RetryFlag int `json:"retry_flag"`
+	Timeout   int `json:"timeout"`
+}
+
+func (h *CollectorHandler) UpdateCollectorSettings(c *gin.Context) {
+	var req UpdateCollectorSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "请求参数无效: " + err.Error()})
+		return
+	}
+	if req.RetryFlag < 0 {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "retry_flag 不能为负数"})
+		return
+	}
+	if req.Timeout <= 0 || req.Timeout > 300 {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "timeout 必须在 1-300 秒之间"})
+		return
+	}
+	s := model.CollectorSettings{ID: 1, RetryFlag: req.RetryFlag, Timeout: req.Timeout}
+	err := database.WithRetry(func(db *gorm.DB) error {
+		return db.Save(&s).Error
+	}, 3, 100*time.Millisecond)
+	if err != nil {
+		logger.Error("Save CollectorSettings failed", "error", err)
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Code: "SAVE_FAILED", Message: "保存设置失败: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    "SUCCESS",
+		"message": "保存设置成功",
+		"data": gin.H{"retry_flag": s.RetryFlag, "timeout": s.Timeout},
+	})
 }

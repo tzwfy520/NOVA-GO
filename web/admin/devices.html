@@ -9,12 +9,14 @@
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 20px; }
     h1 { font-size: 20px; }
-    input, select { padding: 6px; margin: 4px 0; }
+    input, select, textarea { padding: 6px; margin: 4px 0; }
     button { padding: 6px 12px; margin-right: 8px; }
     table { border-collapse: collapse; width: 100%; margin-top: 12px; }
     th, td { border: 1px solid #e5e7eb; padding: 6px; text-align: left; }
     .row { display: flex; gap: 12px; align-items: center; }
     .muted { color: #666; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 998; display: none; }
+    .modal { position: fixed; top: 10%; left: 50%; transform: translateX(-50%); background: #fff; border: 1px solid #e5e7eb; padding: 16px; width: 720px; max-width: 92vw; z-index: 999; box-shadow: 0 10px 20px rgba(0,0,0,0.12); }
   </style>
 </head>
 <body>
@@ -23,121 +25,383 @@
     <label>状态</label>
     <select id="status">
       <option value="">全部</option>
-      <option>online</option>
-      <option>offline</option>
-      <option>unknown</option>
+      <option value="true">启用</option>
+      <option value="false">禁用</option>
     </select>
-    <label>类型</label>
-    <input id="type" placeholder="例如: router" />
-    <label>页码</label>
-    <input id="page" type="number" value="1" style="width:80px" />
-    <label>每页</label>
-    <input id="size" type="number" value="10" style="width:80px" />
-    <button onclick="loadList()">加载列表</button>
+    <label>设备类型</label>
+    <select id="type"><option value="">全部</option></select>
+    <button onclick="openAdd()">新增</button>
   </div>
 
+  <div id="add_form" style="display:none; border:1px solid #e5e7eb; padding:12px; margin:12px 0;">
+    <div class="row" style="justify-content: space-between;">
+      <strong id="form_title">新增设备</strong>
+      <button onclick="toggleAdd()">关闭</button>
+    </div>
+    <div class="row">
+      <input id="new_name" placeholder="设备名称" />
+      <input id="new_ip" placeholder="IP地址" />
+      <input id="new_port" type="number" placeholder="端口" value="22" />
+      <select id="new_device_type"></select>
+    </div>
+    <!-- 备注已移至最后一行 -->
+    <div class="row">
+      <input id="new_username" placeholder="用户名" />
+      <input id="new_password" placeholder="密码" type="password" />
+      <input id="new_enable_password" placeholder="特权密码(可选)" type="password" />
+    </div>
+    <div id="dup_tip" class="muted" style="margin:4px 0 0; color:#b91c1c;"></div>
+    <div class="row" style="align-items:flex-start;">
+      <label>备注</label>
+      <input id="new_remarks" placeholder="备注（可选，文本）" style="width:360px;" />
+    </div>
+    <div class="row" id="action_row" style="justify-content:flex-end; gap:8px;">
+      <button id="save_btn" onclick="createDevice()">保存</button>
+      <button id="collapse_btn" onclick="toggleAdd()">收起</button>
+      <button id="cancel_btn" onclick="toggleAdd()">取消</button>
+    </div>
+  </div>
+
+  <div id="modal_backdrop" class="modal-backdrop"></div>
   <table>
     <thead>
       <tr>
-        <th>ID</th>
-        <th>IP</th>
+        <th>编号</th>
+        <th>设备名</th>
+        <th>IP地址</th>
         <th>端口</th>
-        <th>平台</th>
-        <th>厂商</th>
-        <th>型号</th>
-        <th>版本</th>
-        <th>状态</th>
+        <th>设备类型</th>
+        <th>备注</th>
         <th>操作</th>
       </tr>
     </thead>
     <tbody id="tbody"></tbody>
   </table>
-
-  <h3>新增设备</h3>
-  <div class="row">
-    <input id="new_ip" placeholder="IP" />
-    <input id="new_port" type="number" placeholder="端口" value="22" />
-    <input id="new_platform" placeholder="平台" />
-    <input id="new_vendor" placeholder="厂商" />
-    <input id="new_model" placeholder="型号" />
-    <input id="new_version" placeholder="版本" />
-    <input id="new_username" placeholder="用户名" />
-    <input id="new_password" placeholder="密码" type="password" />
-    <button onclick="createDevice()">新增</button>
+  <div class="row" id="pagination_wrapper" style="justify-content:flex-end; gap:8px; margin-top:8px;">
+    <label>每页</label>
+    <select id="page_size">
+      <option value="10">10</option>
+      <option value="20">20</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+    </select>
+    <div id="pagination_bar" class="row" style="gap:6px;"></div>
   </div>
-  <p class="muted">如需更多字段，请后续扩展。</p>
+
+  <h3 style="display:none">新增设备</h3>
+  <div class="row" style="display:none">
+    <!-- 旧新增区域已迁移到顶部折叠表单 -->
+  </div>
+  <p class="muted" style="display:none">如需更多字段，请后续扩展。</p>
 
   <script>
+    // 全局分页状态
+    let currentPage = 1;
+    let pageSize = 10;
     async function loadList() {
       const q = new URLSearchParams();
       const status = document.getElementById('status').value;
-      const type = document.getElementById('type').value.trim();
-      const page = document.getElementById('page').value;
-      const size = document.getElementById('size').value;
-      if (status) q.set('status', status);
+      const type = document.getElementById('type').value;
+      if (status) q.set('enabled', status);
       if (type) q.set('type', type);
-      q.set('page', page); q.set('size', size);
+      q.set('page', String(currentPage));
+      q.set('size', String(pageSize));
       const res = await fetch('/api/v1/devices?' + q.toString());
       const data = await res.json();
       const list = (data.data && data.data.devices) || [];
+      window.currentDevices = list;
       const tbody = document.getElementById('tbody');
       tbody.innerHTML = '';
-      for (const d of list) {
+      // 按设备名字符顺序排序
+      list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh', { sensitivity: 'base', numeric: true }));
+      const pagination = (data.data && data.data.pagination) || { page: currentPage, size: pageSize, pages: 1 };
+      // 同步当前页与每页
+      currentPage = pagination.page || currentPage;
+      pageSize = pagination.size || pageSize;
+      const selSize = document.getElementById('page_size'); if (selSize && String(selSize.value) !== String(pageSize)) selSize.value = String(pageSize);
+      // 渲染列表
+      list.forEach((d, idx) => {
+        const number = (currentPage - 1) * pageSize + idx + 1;
         const tr = document.createElement('tr');
+        const opKey = [String(d.ip||''), String(d.port||''), String(d.username||'')].join(':');
         tr.innerHTML = `
-          <td>${d.id}</td>
+          <td>${number}</td>
+          <td>${escapeHtml(d.name || '')}</td>
           <td>${escapeHtml(d.ip)}</td>
           <td>${d.port}</td>
-          <td>${escapeHtml(d.type || d.device_platform || '')}</td>
-          <td>${escapeHtml(d.vendor || '')}</td>
-          <td>${escapeHtml(d.model || '')}</td>
-          <td>${escapeHtml(d.version || '')}</td>
-          <td>${escapeHtml(d.status || '')}</td>
+          <td>${escapeHtml(d.device_type || '')}</td>
+          <td>${escapeHtml(d.remarks || '')}</td>
           <td>
-            <button onclick="testConn(${d.id})">测试连接</button>
-            <button onclick="delDevice(${d.id})">删除</button>
+            <button onclick="editDevice('${jsStr(opKey)}')">编辑</button>
+            <button onclick="toggleEnabled('${jsStr(opKey)}', ${d.enabled ? 'false' : 'true'})">${d.enabled ? '禁用' : '启用'}</button>
+            <button onclick="delDevice('${jsStr(opKey)}')">删除</button>
           </td>
         `;
         tbody.appendChild(tr);
-      }
+      });
+      // 渲染分页条
+      renderPagination(pagination.pages || 1);
+    }
+
+    function renderPagination(totalPages){
+      const bar = document.getElementById('pagination_bar');
+      if (!bar) return;
+      bar.innerHTML = '';
+      const makeBtn = (text, disabled, onClick) => {
+        const b = document.createElement('button');
+        b.textContent = text;
+        if (disabled) b.disabled = true;
+        if (onClick) b.onclick = onClick;
+        return b;
+      };
+      // 上一页
+      bar.appendChild(makeBtn('<', currentPage <= 1, () => { if (currentPage > 1) { currentPage--; loadList(); } }));
+      // 数字页按钮（带省略号逻辑）
+      const maxBtns = 7;
+      let start = Math.max(1, currentPage - 3);
+      let end = Math.min(totalPages, start + maxBtns - 1);
+      start = Math.max(1, end - maxBtns + 1);
+      const addEllipsis = () => { const s = document.createElement('span'); s.textContent = '...'; bar.appendChild(s); };
+      const addPageBtn = (p) => { bar.appendChild(makeBtn(String(p), p === currentPage, () => { currentPage = p; loadList(); })); };
+      if (start > 1) { addPageBtn(1); if (start > 2) addEllipsis(); }
+      for (let p = start; p <= end; p++) addPageBtn(p);
+      if (end < totalPages) { if (end < totalPages - 1) addEllipsis(); addPageBtn(totalPages); }
+      // 下一页
+      bar.appendChild(makeBtn('>', currentPage >= totalPages, () => { if (currentPage < totalPages) { currentPage++; loadList(); } }));
     }
 
     async function createDevice() {
+      const name = document.getElementById('new_name').value.trim();
+      const ip = document.getElementById('new_ip').value.trim();
+      const port = parseInt(document.getElementById('new_port').value, 10);
+      const deviceType = document.getElementById('new_device_type').value.trim();
+      const username = document.getElementById('new_username').value.trim();
+      const password = document.getElementById('new_password').value;
+      const enablePassword = document.getElementById('new_enable_password').value;
+      const isEdit = !!window.editingId;
+      if (!name || !ip || !port || !deviceType || !username || (!isEdit && !password)) {
+        alert('请填写必填项：设备名称、IP地址、端口、设备类型、用户名' + (isEdit ? '' : '、密码'));
+        return;
+      }
+      // 本地重复校验（ip+port+username）
+      const list = window.currentDevices || [];
+      const conflict = list.find(d =>
+        String(d.ip).trim() === ip &&
+        Number(d.port) === port &&
+        String(d.username).trim() === username &&
+        (!isEdit || String(d.id) !== String(window.editingId))
+      );
+      if (conflict) {
+        const desc = conflict.name || (String(conflict.ip) + ':' + String(conflict.port));
+        if (!confirm('已存在相同 IP/端口/用户名 的设备「' + desc + '」。仍要提交吗？')) {
+          return;
+        }
+      }
       const body = {
-        ip: document.getElementById('new_ip').value.trim(),
-        port: parseInt(document.getElementById('new_port').value, 10),
-        type: document.getElementById('new_platform').value.trim(),
-        vendor: document.getElementById('new_vendor').value.trim(),
-        model: document.getElementById('new_model').value.trim(),
-        version: document.getElementById('new_version').value.trim(),
-        username: document.getElementById('new_username').value.trim(),
-        password: document.getElementById('new_password').value,
+        name,
+        ip,
+        port,
+        device_type: deviceType,
+        username,
       };
-      const res = await fetch('/api/v1/devices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      // 备注（纯文本）
+      const remarksRaw = document.getElementById('new_remarks').value.trim();
+      if (remarksRaw) {
+        body.remarks = remarksRaw;
+      }
+      if (password) body.password = password;
+      if (enablePassword) body.enable_password = enablePassword;
+      const url = isEdit ? ('/api/v1/devices/' + encodeURIComponent(window.editingId)) : '/api/v1/devices';
+      const method = isEdit ? 'PUT' : 'POST';
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
-      alert(data.message || '创建完成');
+      alert(data.message || (isEdit ? '更新完成' : '创建完成'));
+      toggleAdd();
       loadList();
+      window.editingId = null;
+      const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存';
     }
 
-    async function delDevice(id) {
-      if (!confirm('确认删除设备 #' + id + ' ?')) return;
-      const res = await fetch('/api/v1/devices/' + id, { method: 'DELETE' });
+    async function delDevice(key) {
+      const list = window.currentDevices || [];
+      const d = list.find(x => makeKey(x) === String(key));
+      if (!d) { alert('未找到设备'); return; }
+      const desc = (d.ip || '') + ':' + String(d.port || '') + ' ' + (d.username || '');
+      if (!confirm('确认删除设备 ' + desc + ' ?')) return;
+      const res = await fetch('/api/v1/devices/' + encodeURIComponent(d.id), { method: 'DELETE' });
       const data = await res.json();
       alert(data.message || '删除完成');
       loadList();
     }
 
-    async function testConn(id) {
-      const res = await fetch('/api/v1/devices/' + id + '/test', { method: 'POST' });
+    async function toggleEnabled(key, enabled) {
+      const list = window.currentDevices || [];
+      const d = list.find(x => makeKey(x) === String(key));
+      if (!d) { alert('未找到设备'); return; }
+      const res = await fetch('/api/v1/devices/' + encodeURIComponent(d.id) + '/enabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+      });
       const data = await res.json();
-      alert(data.message || '测试完成');
+      alert(data.message || '操作完成');
+      loadList();
+    }
+
+    function toggleAdd(){
+      const el = document.getElementById('add_form');
+      const backdrop = document.getElementById('modal_backdrop');
+      const show = (!el.style.display || el.style.display === 'none');
+      el.style.display = show ? 'block' : 'none';
+      if (show) {
+        el.classList.add('modal');
+        if (backdrop) backdrop.style.display = 'block';
+        const cancelBtn = document.getElementById('cancel_btn'); if (cancelBtn) cancelBtn.textContent = '取消';
+        const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存';
+        const titleEl = document.getElementById('form_title'); if (titleEl) titleEl.textContent = '新增设备';
+      } else {
+        el.classList.remove('modal');
+        if (backdrop) backdrop.style.display = 'none';
+        window.editingId = null;
+        const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存';
+      }
+    }
+
+    // 新增按钮弹框：显式打开并重置表单
+    function openAdd(){
+      try {
+        window.editingId = null;
+        const el = document.getElementById('add_form');
+        const backdrop = document.getElementById('modal_backdrop');
+        // 重置表单字段
+        const setVal = (id, v) => { const x = document.getElementById(id); if (x) x.value = v; };
+        setVal('new_name','');
+        setVal('new_ip','');
+        setVal('new_port','22');
+        setVal('new_username','');
+        setVal('new_password','');
+        setVal('new_enable_password','');
+        setVal('new_remarks','');
+        const selType = document.getElementById('new_device_type');
+        if (selType && selType.options && selType.options.length > 0) {
+          selType.value = selType.options[0].value;
+        }
+        const titleEl = document.getElementById('form_title'); if (titleEl) titleEl.textContent = '新增设备';
+        const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存';
+        const cancelBtn = document.getElementById('cancel_btn'); if (cancelBtn) cancelBtn.textContent = '取消';
+        // 显示弹框
+        el.style.display = 'block';
+        el.classList.add('modal');
+        if (backdrop) backdrop.style.display = 'block';
+        if (typeof updateDupTip === 'function') { updateDupTip(); }
+      } catch (e) {
+        alert('打开新增失败: ' + e);
+      }
+    }
+
+    function jsStr(s){
+      return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     }
 
     function escapeHtml(s){
       return String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     }
 
-    loadList();
+    function makeKey(d){
+      return [String(d.ip||''), String(d.port||''), String(d.username||'')].join(':');
+    }
+
+    async function fillDeviceTypes(){
+      try {
+        const res = await fetch('/api/v1/device-types');
+        const list = await res.json();
+        const items = Array.isArray(list) ? list : [];
+        // 筛选下拉（包含“全部”）
+        const selFilter = document.getElementById('type');
+        if (selFilter) {
+          selFilter.innerHTML = '';
+          const optAll = document.createElement('option'); optAll.value = ''; optAll.textContent = '全部'; selFilter.appendChild(optAll);
+          items.forEach(item => {
+            const name = item.name || [item.vendor, item.system, item.kind, item.tag].filter(Boolean).join('-');
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            selFilter.appendChild(opt);
+          });
+        }
+        // 新增/编辑下拉（不含“全部”）
+        const selNew = document.getElementById('new_device_type');
+        if (selNew) {
+          selNew.innerHTML = '';
+          items.forEach(item => {
+            const name = item.name || [item.vendor, item.system, item.kind, item.tag].filter(Boolean).join('-');
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            selNew.appendChild(opt);
+          });
+        }
+      } catch (e) {
+        console.warn('加载设备类型失败', e);
+      }
+    }
+
+    document.getElementById('status').addEventListener('change', () => { currentPage = 1; loadList(); });
+    document.getElementById('type').addEventListener('change', () => { currentPage = 1; loadList(); });
+    document.getElementById('page_size').addEventListener('change', (e) => { pageSize = parseInt(e.target.value, 10) || 10; currentPage = 1; loadList(); });
+    // 输入变更时实时提示重复
+    function updateDupTip(){
+      const tipEl = document.getElementById('dup_tip');
+      if (!tipEl) return;
+      const ip = (document.getElementById('new_ip').value || '').trim();
+      const port = parseInt(document.getElementById('new_port').value, 10);
+      const username = (document.getElementById('new_username').value || '').trim();
+      if (!ip || !port || !username){ tipEl.textContent = ''; return; }
+      const list = window.currentDevices || [];
+      const match = list.find(d =>
+        String(d.ip).trim() === ip &&
+        Number(d.port) === port &&
+        String(d.username).trim() === username &&
+        (!window.editingId || String(d.id) !== String(window.editingId))
+      );
+      if (match) {
+        const nm = match.name || (String(match.ip) + ':' + String(match.port));
+        tipEl.textContent = '提示：已存在同 IP/端口/用户名 的设备「' + nm + '」。';
+        tipEl.style.color = '#b91c1c';
+      } else {
+        tipEl.textContent = '';
+      }
+    }
+    ['new_ip','new_port','new_username'].forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('input', updateDupTip); });
+    (async () => { await fillDeviceTypes(); await loadList(); updateDupTip(); })();
+
+    // 编辑模式：预填充表单并切换保存为更新
+    window.editingId = null;
+    function editDevice(key){
+      try {
+        // 优先从当前列表查找，避免对字符串ID的后端兼容问题
+        const list = window.currentDevices || [];
+        const d = list.find(x => makeKey(x) === String(key));
+        if (!d) { alert('未找到设备，请先点击“加载”'); return; }
+        document.getElementById('new_name').value = d.name || '';
+        document.getElementById('new_ip').value = d.ip || '';
+        document.getElementById('new_port').value = d.port || 22;
+        document.getElementById('new_device_type').value = d.device_type || '';
+        document.getElementById('new_username').value = d.username || '';
+        document.getElementById('new_password').value = '';
+        document.getElementById('new_enable_password').value = d.enable_password || '';
+        document.getElementById('new_remarks').value = d.remarks || '';
+        window.editingId = d.id;
+        const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存修改';
+        const el = document.getElementById('add_form'); el.style.display = 'block'; el.classList.add('modal');
+        const cancelBtn = document.getElementById('cancel_btn'); if (cancelBtn) cancelBtn.textContent = '取消';
+        const backdrop = document.getElementById('modal_backdrop'); if (backdrop) backdrop.style.display = 'block';
+        const titleEl = document.getElementById('form_title'); if (titleEl) titleEl.textContent = '编辑设备';
+        if (typeof updateDupTip === 'function') { updateDupTip(); }
+      } catch (e) {
+        alert('进入编辑失败: ' + e);
+      }
+    }
   </script>
 </body>
 </html>

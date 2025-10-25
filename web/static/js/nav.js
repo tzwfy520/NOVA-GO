@@ -2,9 +2,9 @@
   document.addEventListener('DOMContentLoaded', function(){
     var links = [
       { path: '/admin/collector', label: '采集器主页', emoji: '📊' },
-      { path: '/admin/device-types', label: '设备类型', emoji: '🧩' },
       { path: '/admin/devices', label: '设备清单', emoji: '📋' },
-      { path: '/admin/ssh-adapter', label: 'SSH适配', emoji: '🔧' },
+      { path: '/admin/device-types', label: '设备类型', emoji: '📦' },
+      { path: '/admin/ssh-adapter', label: '交互类型', emoji: '🔧' },
       { path: '/admin/logs', label: '日志查询', emoji: '🗂️' },
       { path: '/admin/quick-collect', label: '快速采集', emoji: '⚡' },
       { path: '/admin/simulate', label: '模拟设置', emoji: '🎛️' },

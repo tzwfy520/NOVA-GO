@@ -2,99 +2,232 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>设备类型（厂商与类型定义）</title>
+  <title>设备类型管理</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/static/css/nav.css" />
   <script src="/static/js/nav.js" defer></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 20px; }
     h1 { font-size: 20px; }
-    input, select, textarea { padding: 6px; margin: 4px 0; width: 100%; }
+    input, select { padding: 6px; margin: 4px 0; }
     button { padding: 6px 12px; margin-right: 8px; }
-    pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border: 1px solid #e5e7eb; padding: 6px; text-align: left; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
     .muted { color: #666; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 998; display: none; }
+    .modal { position: fixed; top: 10%; left: 50%; transform: translateX(-50%); background: #fff; border: 1px solid #e5e7eb; padding: 16px; width: 720px; max-width: 92vw; z-index: 999; box-shadow: 0 10px 20px rgba(0,0,0,0.12); }
   </style>
 </head>
 <body>
-  <h1>设备类型（厂商与类型定义）</h1>
+  <h1>设备类型管理</h1>
+  <div class="row">
+    <input id="search" placeholder="搜索类型名称/厂商/操作系统/类型/标签" style="width: 360px;" />
+    <button onclick="loadDeviceTypes()">搜索</button>
+    <button onclick="openAdd()">新增</button>
+  </div>
 
-  <div class="grid">
-    <div class="card">
-      <h3>平台默认适配参数</h3>
-      <div>
-        <button onclick="loadDefaults()">加载默认参数</button>
-      </div>
-      <pre id="defaults">点击加载</pre>
-
-      <h4>更新平台参数（仅运行时）</h4>
-      <label>平台标识（如 cisco/huawei/h3c/linux）</label>
-      <input id="platform" placeholder="cisco" />
-      <label>提示符后缀（逗号分隔）</label>
-      <input id="prompt_suffixes" placeholder="#,&gt;,]" />
-      <label>关闭分页命令（逗号分隔）</label>
-      <input id="disable_paging_cmds" placeholder="terminal length 0" />
-      <label>是否需要 enable（true/false）</label>
-      <input id="enable_required" placeholder="false" />
-      <label>跳过延迟回显（true/false）</label>
-      <input id="skip_delayed_echo" placeholder="false" />
-      <label>配置模式命令（逗号分隔）</label>
-      <input id="config_mode_clis" placeholder="configure terminal" />
-      <label>退出配置模式命令</label>
-      <input id="config_exit_cli" placeholder="end" />
-      <div>
-        <button onclick="updateDefaults()">更新</button>
-      </div>
-      <pre id="update_result"></pre>
+  <div id="add_form" style="display:none; border:1px solid #e5e7eb; padding:12px; margin:12px 0;">
+    <div class="row" style="justify-content: space-between;">
+      <strong id="form_title">新增设备类型</strong>
+      <button onclick="toggleAdd()">关闭</button>
     </div>
-
-    <div class="card">
-      <h3>厂商与类型定义</h3>
-      <p class="muted">目前未接入持久化与后台模型，留空待开发。</p>
-      <p>规划：维护厂商（Vendor）与设备类型（Type）的字典，平台映射关系与默认交互参数。</p>
+    <div class="row">
+      <input id="new_vendor" placeholder="厂商 (必填)" />
+      <input id="new_system" placeholder="操作系统 (必填)" />
+      <input id="new_kind" placeholder="类型 (选填，默认all)" />
+      <input id="new_tag" placeholder="标签 (选填，默认default)" />
+    </div>
+    <div class="row">
+      <label>交互类型</label>
+      <select id="new_ssh_type"></select>
+      <label>启用</label>
+      <select id="new_enabled"><option value="true">是</option><option value="false">否</option></select>
+    </div>
+    <div class="row">
+      <button id="save_btn" onclick="saveDeviceType()">保存</button>
+      <button onclick="toggleAdd()">收起</button>
     </div>
   </div>
 
+  <div id="modal_backdrop" class="modal-backdrop"></div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>编号</th>
+        <th style="width: 360px;">类型名称</th>
+        <th>厂商</th>
+        <th>操作系统</th>
+        <th>类型</th>
+        <th>标签</th>
+        <th>交互类型</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
   <script>
-    async function loadDefaults() {
+    function escapeHtml(s){
+      return String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    }
+    function jsStr(s){
+      return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    }
+
+    async function loadInteractionTypes(){
       try {
-        const res = await fetch('/api/v1/admin/device-defaults');
+        const res = await fetch('/api/v1/ssh-adapter/platforms');
         const data = await res.json();
-        document.getElementById('defaults').textContent = JSON.stringify(data, null, 2);
+        const items = Array.isArray(data.data) ? data.data : [];
+        const sel = document.getElementById('new_ssh_type');
+        sel.innerHTML = '';
+        for (const p of items) {
+          const opt = document.createElement('option');
+          opt.value = p.ssh_type || p.type || '';
+          opt.textContent = p.ssh_type || p.type || '';
+          sel.appendChild(opt);
+        }
       } catch (e) {
-        document.getElementById('defaults').textContent = '加载失败: ' + e;
+        console.warn('加载交互类型失败', e);
       }
     }
-    async function updateDefaults() {
-      const platform = document.getElementById('platform').value.trim();
-      if (!platform) {
-        alert('平台不可为空'); return;
+
+    async function loadDeviceTypes(){
+      const q = document.getElementById('search').value.trim();
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      const res = await fetch('/api/v1/device-types?' + params.toString());
+      const list = await res.json();
+      window.currentDeviceTypes = Array.isArray(list) ? list : [];
+      // 按类型名称（厂商+操作系统+类型+标签）字母顺序排序
+      window.currentDeviceTypes.sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'zh',{sensitivity:'base',numeric:true}));
+      const tbody = document.getElementById('tbody');
+      tbody.innerHTML = '';
+      window.currentDeviceTypes.forEach((d, idx) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${idx+1}</td>
+          <td>${escapeHtml(d.name||'')}</td>
+          <td>${escapeHtml(d.vendor||'')}</td>
+          <td>${escapeHtml(d.system||'')}</td>
+          <td>${escapeHtml(d.kind||'')}</td>
+          <td>${escapeHtml(d.tag||'')}</td>
+          <td>${escapeHtml(d.ssh_type||'')}</td>
+          <td>
+            <button onclick="toggleEnabled(${d.id}, ${d.enabled ? 'false' : 'true'})">${d.enabled ? '禁用' : '启用'}</button>
+            <button onclick="editType(${d.id})">编辑</button>
+            <button onclick="delType(${d.id})">删除</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function toggleAdd(){
+      const el = document.getElementById('add_form');
+      const backdrop = document.getElementById('modal_backdrop');
+      const show = (!el.style.display || el.style.display === 'none');
+      el.style.display = show ? 'block' : 'none';
+      if (show) {
+        el.classList.add('modal');
+        if (backdrop) backdrop.style.display = 'block';
+        const cancelBtn = document.querySelector('#add_form button[onclick="toggleAdd()"]'); if (cancelBtn) cancelBtn.textContent = '取消';
+        const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存';
+        const titleEl = document.getElementById('form_title'); if (titleEl) titleEl.textContent = '新增设备类型';
+      } else {
+        el.classList.remove('modal');
+        if (backdrop) backdrop.style.display = 'none';
+        window.editingId = null;
+        const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存';
+        const cancelBtn = document.querySelector('#add_form button[onclick="toggleAdd()"]'); if (cancelBtn) cancelBtn.textContent = '收起';
+        const titleEl = document.getElementById('form_title'); if (titleEl) titleEl.textContent = '新增设备类型';
       }
-      const toArr = v => v.split(',').map(s => s.trim()).filter(Boolean);
-      const body = {
-        prompt_suffixes: toArr(document.getElementById('prompt_suffixes').value),
-        disable_paging_cmds: toArr(document.getElementById('disable_paging_cmds').value),
-        enable_required: parseBool(document.getElementById('enable_required').value),
-        skip_delayed_echo: parseBool(document.getElementById('skip_delayed_echo').value),
-        config_mode_clis: toArr(document.getElementById('config_mode_clis').value),
-        config_exit_cli: document.getElementById('config_exit_cli').value.trim(),
-      };
+    }
+
+    function openAdd(){
       try {
-        const res = await fetch('/api/v1/admin/device-defaults/' + encodeURIComponent(platform), {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-        });
-        const data = await res.json();
-        document.getElementById('update_result').textContent = JSON.stringify(data, null, 2);
+        window.editingId = null;
+        document.getElementById('new_vendor').value = '';
+        document.getElementById('new_system').value = '';
+        document.getElementById('new_kind').value = '';
+        document.getElementById('new_tag').value = '';
+        document.getElementById('new_enabled').value = 'true';
+        const titleEl = document.getElementById('form_title'); if (titleEl) titleEl.textContent = '新增设备类型';
+        const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存';
+        const cancelBtn = document.querySelector('#add_form button[onclick="toggleAdd()"]'); if (cancelBtn) cancelBtn.textContent = '取消';
+        const el = document.getElementById('add_form'); el.style.display = 'block'; el.classList.add('modal');
+        const backdrop = document.getElementById('modal_backdrop'); if (backdrop) backdrop.style.display = 'block';
       } catch (e) {
-        document.getElementById('update_result').textContent = '更新失败: ' + e;
+        alert('打开新增失败: ' + e);
       }
     }
-    function parseBool(v) {
-      const t = (v||'').trim().toLowerCase();
-      if (!t) return undefined; // 不传字段表示不更新
-      return t === 'true';
+
+    async function saveDeviceType(){
+      const vendor = document.getElementById('new_vendor').value.trim();
+      const system = document.getElementById('new_system').value.trim();
+      const kind = document.getElementById('new_kind').value.trim();
+      const tag = document.getElementById('new_tag').value.trim();
+      const sshType = document.getElementById('new_ssh_type').value.trim();
+      const enabled = document.getElementById('new_enabled').value === 'true';
+      const isEdit = !!window.editingId;
+      if (!vendor || !system || !sshType) {
+        alert('请填写必填项：厂商、操作系统、交互类型');
+        return;
+      }
+      const body = { vendor, system, kind: (kind||'all'), tag, ssh_type: sshType, enabled };
+      const url = isEdit ? ('/api/v1/device-types/' + encodeURIComponent(window.editingId)) : '/api/v1/device-types';
+      const method = isEdit ? 'PUT' : 'POST';
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json();
+      alert(data.message || (isEdit ? '更新完成' : '创建完成'));
+      toggleAdd();
+      loadDeviceTypes();
+      window.editingId = null;
+      const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存';
     }
+
+    function editType(id){
+      try {
+        const list = window.currentDeviceTypes || [];
+        const d = list.find(x => String(x.id) === String(id));
+        if (!d) { alert('未找到设备类型，请先搜索刷新'); return; }
+        document.getElementById('new_vendor').value = d.vendor || '';
+        document.getElementById('new_system').value = d.system || '';
+        document.getElementById('new_kind').value = d.kind || '';
+        document.getElementById('new_tag').value = d.tag || '';
+        document.getElementById('new_ssh_type').value = d.ssh_type || '';
+        document.getElementById('new_enabled').value = d.enabled ? 'true' : 'false';
+        window.editingId = d.id;
+        const btn = document.getElementById('save_btn'); if (btn) btn.textContent = '保存修改';
+        const el = document.getElementById('add_form'); el.style.display = 'block'; el.classList.add('modal');
+        const cancelBtn = document.querySelector('#add_form button[onclick="toggleAdd()"]'); if (cancelBtn) cancelBtn.textContent = '取消';
+        const backdrop = document.getElementById('modal_backdrop'); if (backdrop) backdrop.style.display = 'block';
+        const titleEl = document.getElementById('form_title'); if (titleEl) titleEl.textContent = '编辑设备类型';
+      } catch (e) {
+        alert('进入编辑失败: ' + e);
+      }
+    }
+
+    async function toggleEnabled(id, enabled){
+      const res = await fetch('/api/v1/device-types/' + encodeURIComponent(id) + '/enabled', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled })
+      });
+      const data = await res.json();
+      alert(data.message || '操作完成');
+      loadDeviceTypes();
+    }
+
+    async function delType(id){
+      if (!confirm('确认删除类型 #' + id + ' ?')) return;
+      const res = await fetch('/api/v1/device-types/' + encodeURIComponent(id), { method: 'DELETE' });
+      const data = await res.json();
+      alert(data.message || '删除完成');
+      loadDeviceTypes();
+    }
+
+    (async () => { await loadInteractionTypes(); await loadDeviceTypes(); })();
   </script>
 </body>
 </html>

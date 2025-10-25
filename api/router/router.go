@@ -72,6 +72,7 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 		// 采集器相关路由
 		collector := v1.Group("/collector")
 		{
+			collector.POST("/fast", collectorHandler.FastCollect)
 			collector.POST("/batch", collectorHandler.BatchExecute)
 			// 新增拆封后的批量接口
 			collector.POST("/batch/custom", collectorHandler.BatchExecuteCustomer)
@@ -79,6 +80,9 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 			collector.GET("/task/:task_id/status", collectorHandler.GetTaskStatus)
 			collector.POST("/task/:task_id/cancel", collectorHandler.CancelTask)
 			collector.GET("/stats", collectorHandler.GetStats)
+			// 新增：快速采集设置（sqlite）
+			collector.GET("/settings", collectorHandler.GetCollectorSettings)
+			collector.POST("/settings", collectorHandler.UpdateCollectorSettings)
 		}
 
 		// 设备管理路由
@@ -90,6 +94,7 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 			devices.PUT("/:id", deviceHandler.UpdateDevice)
 			devices.DELETE("/:id", deviceHandler.DeleteDevice)
 			devices.POST("/:id/test", deviceHandler.TestConnection)
+			devices.POST("/:id/enabled", deviceHandler.SetEnabled)
 		}
 
 		// 备份路由
@@ -124,6 +129,17 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 			ssh.PUT("/platforms/:id/params", sshAdapterHandler.UpdateParams)
 			ssh.GET("/platforms/:id/yaml", sshAdapterHandler.GetPlatformYAML)
 			ssh.POST("/generate", sshAdapterHandler.GenerateYAML)
+		}
+
+		// 设备类型管理
+		devtypes := v1.Group("/device-types")
+		{
+			devtypes.GET("", handler.ListDeviceTypes)
+			devtypes.POST("", handler.CreateDeviceType)
+			devtypes.GET("/:id", handler.GetDeviceType)
+			devtypes.PUT("/:id", handler.UpdateDeviceType)
+			devtypes.DELETE("/:id", handler.DeleteDeviceType)
+			devtypes.POST("/:id/enabled", handler.SetDeviceTypeEnabled)
 		}
 
 		// 模拟命令管理

@@ -9,77 +9,287 @@
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif; margin: 20px; }
     h1 { font-size: 20px; }
-    input, textarea, select { padding: 6px; margin: 4px 0; width: 100%; }
-    button { padding: 6px 12px; margin-right: 8px; }
+    input, textarea, select { padding: 6px; margin: 4px 0; }
+    button { padding: 6px 12px; margin-right: 8px; flex: 0 0 auto; }
     pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; }
+    .label { min-width: 80px; color: #374151; }
+    .name-input { flex: 1 1 auto; min-width: 180px; } /* 参考设备清单中的设备名称宽度 */
+    .cmd-textarea { width: 100%; min-height: 140px; }
+    .cmd-input { width: 100%; }
+    .device-select { flex: 1 1 auto; min-width: 180px; }
+    .cmd-block { border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; }
+    .cmd-header { background: #f3f4f6; padding: 8px 12px; font-weight: 600; }
+    .cmd-body { padding: 8px 12px; }
+    .error-text { color: #b91c1c; white-space: pre-wrap; }
+    .succ-text { white-space: pre-wrap; }
+    .muted { color: #6b7280; }
+    .settings { border: 1px dashed #d1d5db; padding: 8px; border-radius: 8px; margin-top: 8px; display: none; }
   </style>
 </head>
 <body>
   <h1>快速采集</h1>
   <div class="grid">
     <div class="card">
-      <h3>单设备（自定义批量接口）</h3>
-      <label>任务ID</label>
-      <input id="task_id" placeholder="task_001" />
-      <label>设备IP</label>
-      <input id="device_ip" placeholder="192.168.1.1" />
-      <label>端口</label>
-      <input id="device_port" type="number" value="22" />
-      <label>平台（cisco/huawei/h3c/linux）</label>
-      <input id="device_platform" placeholder="linux" />
-      <label>用户名</label>
-      <input id="user_name" placeholder="root" />
-      <label>密码</label>
-      <input id="password" type="password" />
-      <label>Enable 密码（可选）</label>
-      <input id="enable_password" />
-      <label>命令列表（每行一条）</label>
-      <textarea id="cli_list" rows="6" placeholder="uname -a"></textarea>
-      <label>任务超时（秒，可选）</label>
-      <input id="task_timeout" type="number" placeholder="300" />
-      <label>设备超时（秒，可选）</label>
-      <input id="device_timeout" type="number" placeholder="60" />
-      <button onclick="runCollect()">执行采集</button>
+      <h3>采集输入</h3>
+      <div class="row">
+        <input id="q_name" class="name-input" placeholder="设备名称，输入作为筛选条件" />
+        <button id="btn_search">筛选</button>
+        <select id="device_select" class="device-select"></select>
+        <span id="device_hint" class="muted"></span>
+      </div>
+      <div class="row">
+        <input id="cli_input" class="cmd-input" placeholder="输入采集命令，以‘;’隔开" />
+      </div>
+      <div class="row action-row">
+        <button id="btn_settings_toggle">采集设置</button>
+        <button id="btn_run">采集执行</button>
+        <button id="btn_download" disabled>结果下载</button>
+      </div>
+      <div id="settings_panel" class="settings">
+        <div class="row">
+          <span class="label">重试次数</span>
+          <input id="retry_flag" type="number" min="0" value="0" style="width:120px;" />
+        </div>
+        <div class="row">
+          <span class="label">超时(秒)</span>
+          <input id="timeout" type="number" min="1" max="300" value="30" style="width:120px;" />
+        </div>
+        <div class="row">
+          <button id="btn_settings_save">保存到SQLite</button>
+          <span id="settings_msg" class="muted"></span>
+        </div>
+      </div>
     </div>
     <div class="card">
       <h3>输出结果</h3>
-      <pre id="output">填写参数并点击执行采集</pre>
+      <div id="overall_msg" class="muted">填写参数并点击执行采集</div>
+      <div id="results_container"></div>
     </div>
   </div>
 
   <script>
-    async function runCollect() {
-      const toCli = (document.getElementById('cli_list').value || '').split('\n').map(s => s.trim()).filter(Boolean);
-      const req = {
-        task_id: document.getElementById('task_id').value.trim() || ('quick_' + Date.now()),
-        device_timeout: parseNum(document.getElementById('device_timeout').value),
-        task_timeout: parseNum(document.getElementById('task_timeout').value),
-        devices: [
-          {
-            device_ip: document.getElementById('device_ip').value.trim(),
-            device_port: parseInt(document.getElementById('device_port').value, 10) || 22,
-            device_name: '',
-            device_platform: document.getElementById('device_platform').value.trim(),
-            collect_protocol: 'ssh',
-            user_name: document.getElementById('user_name').value.trim(),
-            password: document.getElementById('password').value,
-            enable_password: document.getElementById('enable_password').value,
-            cli_list: toCli,
-            device_timeout: parseNum(document.getElementById('device_timeout').value)
-          }
-        ]
-      };
+    const state = {
+      devices: [],
+      deviceTypes: [],
+      devTypeMap: {}, // name -> ssh_type
+      selection: null,
+      lastResponse: null,
+      settings: { retry_flag: 0, timeout: 30 },
+    };
+
+    document.getElementById('btn_search').addEventListener('click', applySearch);
+    document.getElementById('btn_settings_toggle').addEventListener('click', () => {
+      const p = document.getElementById('settings_panel');
+      p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
+    });
+    document.getElementById('btn_settings_save').addEventListener('click', saveSettings);
+    document.getElementById('btn_run').addEventListener('click', runFastCollect);
+    document.getElementById('btn_download').addEventListener('click', downloadResults);
+    document.getElementById('device_select').addEventListener('change', onDeviceChange);
+
+    window.addEventListener('load', async () => {
+      await Promise.all([loadSettings(), loadDeviceTypes(), loadDevicesAll()]);
+      rebuildDeviceOptions(state.devices);
+    });
+
+    async function loadSettings(){
       try {
-        const res = await fetch('/api/v1/collector/batch/custom', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) });
+        const res = await fetch('/api/v1/collector/settings');
         const data = await res.json();
-        document.getElementById('output').textContent = JSON.stringify(data, null, 2);
+        const s = (data && data.data) ? data.data : { retry_flag: 0, timeout: 30 };
+        state.settings = s;
+        document.getElementById('retry_flag').value = s.retry_flag ?? 0;
+        document.getElementById('timeout').value = s.timeout ?? 30;
       } catch (e) {
-        document.getElementById('output').textContent = '执行失败: ' + e;
+        console.warn('load settings failed', e);
       }
     }
-    function parseNum(v){ const n = parseInt((v||'').trim(), 10); return Number.isFinite(n)?n:undefined; }
+
+    async function saveSettings(){
+      const retry = parseInt(document.getElementById('retry_flag').value,10);
+      const timeout = parseInt(document.getElementById('timeout').value,10);
+      try {
+        const res = await fetch('/api/v1/collector/settings',{
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ retry_flag: retry, timeout })
+        });
+        const data = await res.json();
+        if (data && data.code === 'SUCCESS'){
+          state.settings = { retry_flag: retry, timeout };
+          document.getElementById('settings_msg').textContent = '保存成功';
+          setTimeout(()=>{ document.getElementById('settings_msg').textContent=''; }, 1500);
+        } else {
+          document.getElementById('settings_msg').textContent = '保存失败: ' + (data && data.message || '未知错误');
+        }
+      } catch(e){
+        document.getElementById('settings_msg').textContent = '保存异常: ' + e;
+      }
+    }
+
+    async function loadDeviceTypes(){
+      try {
+        const res = await fetch('/api/v1/device-types?enabled=true');
+        const list = await res.json();
+        if (Array.isArray(list)){
+          state.deviceTypes = list;
+          state.devTypeMap = {};
+          for (const t of list){ state.devTypeMap[(t.name || '').trim().toLowerCase()] = (t.ssh_type || '').trim(); }
+        }
+      } catch(e){ console.warn('load device types failed', e); }
+    }
+
+    async function loadDevicesAll(){
+      const all = [];
+      let page = 1, size = 100; // handler最大100
+      while(true){
+        const res = await fetch(`/api/v1/devices?page=${page}&size=${size}`);
+        const data = await res.json();
+        const devices = data && data.data && data.data.devices ? data.data.devices : [];
+        const pagination = data && data.data && data.data.pagination ? data.data.pagination : { pages: 1 };
+        all.push(...devices);
+        if (page >= (pagination.pages || 1)) break;
+        page++;
+      }
+      state.devices = all;
+    }
+
+    function applySearch(){
+      const q = (document.getElementById('q_name').value || '').trim().toLowerCase();
+      let list = state.devices;
+      if (q){ list = list.filter(d => (d.name||'').toLowerCase().includes(q)); }
+      rebuildDeviceOptions(list);
+    }
+
+    function rebuildDeviceOptions(list){
+      const sel = document.getElementById('device_select');
+      sel.innerHTML = '';
+      for (const d of list){
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = `${d.name || d.ip} (${d.ip}:${d.port})`;
+        opt.dataset.ip = d.ip; opt.dataset.port = d.port; opt.dataset.name = d.name || ''; opt.dataset.username = d.username || ''; opt.dataset.password = d.password || ''; opt.dataset.devtype = d.device_type || '';
+        sel.appendChild(opt);
+      }
+      if (list.length > 0){ sel.selectedIndex = 0; onDeviceChange(); } else { state.selection = null; document.getElementById('device_hint').textContent = '未找到设备'; }
+    }
+
+    function onDeviceChange(){
+      const sel = document.getElementById('device_select');
+      const opt = sel.options[sel.selectedIndex];
+      if (!opt){ state.selection = null; document.getElementById('device_hint').textContent=''; return; }
+      state.selection = {
+        ip: opt.dataset.ip,
+        port: parseInt(opt.dataset.port,10) || 22,
+        name: opt.dataset.name,
+        username: opt.dataset.username,
+        password: opt.dataset.password,
+        devtypeName: (opt.dataset.devtype || '').trim().toLowerCase(),
+      };
+      const plat = guessPlatform(state.selection.devtypeName);
+      document.getElementById('device_hint').textContent = plat ? `平台: ${plat}` : '平台未知，将按默认处理';
+    }
+
+    function parseCli(input){
+      const raw = (input || '').trim();
+      const parts = raw.split(/[;；,，\/\\]+/).map(x => x.trim()).filter(Boolean);
+      return parts;
+    }
+
+    function guessPlatform(devtypeName){
+      if (!devtypeName) return state.devTypeMap[devtypeName] || '';
+      const mapHit = state.devTypeMap[devtypeName];
+      if (mapHit) return mapHit;
+      const s = devtypeName.toLowerCase();
+      if (s.includes('cisco')) return 'cisco_ios';
+      if (s.includes('huawei')) return 'huawei_vrp';
+      if (s.includes('h3c')) return 'h3c_comware';
+      if (s.includes('linux')) return 'linux_shell';
+      return '';
+    }
+
+    async function runFastCollect(){
+      const dev = state.selection;
+      const cmds = parseCli(document.getElementById('cli_input').value);
+      if (!dev){ setOverall('请选择设备'); return; }
+      if (cmds.length === 0){ setOverall('请填写采集命令'); return; }
+      const platform = guessPlatform(dev.devtypeName);
+      const body = {
+        retry_flag: toNonNeg(state.settings.retry_flag),
+        timeout: toBoundTimeout(state.settings.timeout),
+        device_ip: dev.ip,
+        device_port: dev.port,
+        device_name: dev.name,
+        device_platform: platform,
+        collect_protocol: 'ssh',
+        user_name: dev.username,
+        password: dev.password,
+        cli_list: cmds,
+      };
+      setOverall('采集中...');
+      document.getElementById('btn_run').disabled = true;
+      document.getElementById('btn_download').disabled = true;
+      try {
+        const res = await fetch('/api/v1/collector/fast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await res.json();
+        state.lastResponse = data;
+        renderResults(data);
+      } catch(e){ setOverall('采集失败: ' + e); clearResults(); }
+      finally {
+        document.getElementById('btn_run').disabled = false;
+      }
+    }
+
+    function renderResults(resp){
+      if (!resp || resp.code !== 'SUCCESS'){ setOverall('采集失败: ' + (resp && resp.message || '接口错误')); clearResults(); return; }
+      const d = resp.data || {};
+      if (!d.success){ setOverall('任务整体失败: ' + (d.error || '未知错误')); }
+      else { setOverall(`任务成功，task_id=${d.task_id}，耗时 ${d.duration_ms || d.duration || 0}ms`); }
+      const cont = document.getElementById('results_container');
+      cont.innerHTML = '';
+      const results = Array.isArray(d.results) ? d.results : [];
+      for (const r of results){
+        const blk = document.createElement('div'); blk.className = 'cmd-block';
+        const header = document.createElement('div'); header.className = 'cmd-header'; header.textContent = r.command || '(无命令)'; blk.appendChild(header);
+        const body = document.createElement('div'); body.className = 'cmd-body';
+        if ((r.error || '').trim()){
+          const err = document.createElement('div'); err.className = 'error-text'; err.textContent = `失败原因: ${r.error}`; body.appendChild(err);
+        }
+        const out = document.createElement('pre'); out.className = 'succ-text'; out.textContent = (r.raw_output || '').toString(); body.appendChild(out);
+        const meta = document.createElement('div'); meta.className = 'muted'; meta.textContent = `exit_code=${r.exit_code ?? '-'} | duration=${r.duration_ms ?? '-'}ms`; body.appendChild(meta);
+        blk.appendChild(body);
+        cont.appendChild(blk);
+      }
+      document.getElementById('btn_download').disabled = results.length === 0;
+    }
+
+    function clearResults(){ document.getElementById('results_container').innerHTML = ''; document.getElementById('btn_download').disabled = true; }
+    function setOverall(t){ document.getElementById('overall_msg').textContent = t; }
+    function toNonNeg(v){ const n = parseInt(v,10); return Number.isFinite(n) && n >= 0 ? n : 0; }
+    function toBoundTimeout(v){ const n = parseInt(v,10); return Number.isFinite(n) ? Math.max(1, Math.min(300, n)) : 30; }
+
+    function downloadResults(){
+      const resp = state.lastResponse;
+      if (!resp || !resp.data){ return; }
+      const d = resp.data;
+      const lines = [];
+      lines.push(`任务: ${d.task_id || ''} 成功=${!!d.success} 耗时=${d.duration_ms || d.duration || ''}ms`);
+      const results = Array.isArray(d.results) ? d.results : [];
+      for (const r of results){
+        lines.push(`\n=== ${r.command || '(无命令)'} ===`);
+        if ((r.error||'').trim()) lines.push(`[FAILED] ${r.error}`);
+        lines.push((r.raw_output||'').toString());
+      }
+      const content = lines.join('\n');
+      const blob = new Blob([content], {type: 'text/plain;charset=utf-8'});
+      const a = document.createElement('a');
+      const dev = state.selection || {}; const fname = `${(dev.name||dev.ip||'result')}-${d.task_id || Date.now()}.txt`;
+      a.download = fname.replace(/\s+/g,'_');
+      a.href = URL.createObjectURL(blob);
+      a.style.display = 'none';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    }
   </script>
 </body>
 </html>
