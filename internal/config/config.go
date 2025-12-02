@@ -3,10 +3,10 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
-	"path/filepath"
 
 	"github.com/spf13/viper"
 )
@@ -26,12 +26,12 @@ type Config struct {
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
-	Host         string        `mapstructure:"host"`
-	Port         int           `mapstructure:"port"`
-	Mode         string        `mapstructure:"mode"`
-	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout time.Duration `mapstructure:"write_timeout"`
-	SimulateEnable bool        `mapstructure:"simulate_enable"`
+	Host           string        `mapstructure:"host"`
+	Port           int           `mapstructure:"port"`
+	Mode           string        `mapstructure:"mode"`
+	ReadTimeout    time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout   time.Duration `mapstructure:"write_timeout"`
+	SimulateEnable bool          `mapstructure:"simulate_enable"`
 }
 
 // CollectorConfig 采集器配置
@@ -218,9 +218,9 @@ func Load(configPath string) (*Config, error) {
 
 	// 兼容新嵌套：ssh.timeout.*（若存在则覆盖旧字段）
 	if viper.IsSet("ssh.timeout.timeout_all") {
-		to := viper.GetInt("ssh.timeout.timeout_all")  // 改为GetInt
+		to := viper.GetInt("ssh.timeout.timeout_all") // 改为GetInt
 		if to > 0 {
-			config.SSH.Timeout = time.Duration(to) * time.Second  // 转换为time.Duration
+			config.SSH.Timeout = time.Duration(to) * time.Second // 转换为time.Duration
 		}
 	}
 	// 兼容旧顶层：ssh.timeout（若仍为时长字符串则生效；嵌套块不影响）
@@ -245,10 +245,28 @@ func Load(configPath string) (*Config, error) {
 	// 环境变量替换
 	config = replaceEnvVars(config)
 
-	// 读取 auto-ssh.yaml 的设备平台默认项并覆盖
+	// 读取 auto-ssh.yaml 的设备平台默认项并覆盖（保留 config.yaml 中的长输出命令）
 	autoPath := filepath.Join("configs", "auto-ssh.yaml")
 	if dd, err := loadAutoSSHDeviceDefaults(autoPath); err == nil && len(dd) > 0 {
-		config.Collector.DeviceDefaults = dd
+		// 原始（来自主配置）设备默认项，用于保留未在 auto-ssh 中声明的键
+		orig := config.Collector.DeviceDefaults
+		// 以 auto-ssh 为基准进行合并
+		merged := make(map[string]PlatformDefaultsConfig, len(dd)+len(orig))
+		for p, v := range dd {
+			merged[p] = v
+		}
+		// 保留主配置中的长输出命令（以及缺失的平台）
+		for p, ov := range orig {
+			if mv, ok := merged[p]; ok {
+				if len(mv.LongOutputCommands) == 0 && len(ov.LongOutputCommands) > 0 {
+					mv.LongOutputCommands = append([]string{}, ov.LongOutputCommands...)
+					merged[p] = mv
+				}
+			} else {
+				merged[p] = ov
+			}
+		}
+		config.Collector.DeviceDefaults = merged
 	}
 
 	// 应用并发档位配置（若设置了 concurrency_profile 则覆盖 concurrent 数值）
@@ -311,7 +329,7 @@ func setDefaults() {
 
 	// SSH 超时新默认（替换旧的 connect_timeout 与顶层 timeout）
 	// 全局执行窗口（接口未指定时可参考此值）
-	viper.SetDefault("ssh.timeout.timeout_all", 60)  // 改为int类型，单位秒
+	viper.SetDefault("ssh.timeout.timeout_all", 60) // 改为int类型，单位秒
 	// 拨号与握手阶段拆分默认（合并为 ConnectTimeout 使用）
 	viper.SetDefault("ssh.timeout.dial_timeout", 2)
 	viper.SetDefault("ssh.timeout.auth_timeout", 5)
@@ -439,8 +457,8 @@ func loadAutoSSHDeviceDefaults(path string) (map[string]PlatformDefaultsConfig, 
 		DeviceDefaults map[string]PlatformDefaultsConfig `mapstructure:"device_defaults"`
 	}
 	var root struct {
-		Collector      collectorWrapper                    `mapstructure:"collector"`
-		DeviceDefaults map[string]PlatformDefaultsConfig   `mapstructure:"device_defaults"`
+		Collector      collectorWrapper                  `mapstructure:"collector"`
+		DeviceDefaults map[string]PlatformDefaultsConfig `mapstructure:"device_defaults"`
 	}
 	if err := v.Unmarshal(&root); err != nil {
 		return nil, err
@@ -484,10 +502,10 @@ func (c *Config) GetTimeoutAll(platform string) int {
 
 // OutputFilterConfig 输出过滤配置
 type OutputFilterConfig struct {
-	Prefixes       []string `mapstructure:"prefixes"`
-	Contains       []string `mapstructure:"contains"`
-	CaseInsensitive bool    `mapstructure:"case_insensitive"`
-	TrimSpace       bool    `mapstructure:"trim_space"`
+	Prefixes        []string `mapstructure:"prefixes"`
+	Contains        []string `mapstructure:"contains"`
+	CaseInsensitive bool     `mapstructure:"case_insensitive"`
+	TrimSpace       bool     `mapstructure:"trim_space"`
 }
 
 // InteractConfig 交互配置（提示符、自动交互与错误提示）
@@ -518,7 +536,7 @@ type InteractTimingConfig struct {
 
 // PlatformTimeoutConfig 平台超时配置（与全局 SSH 超时合并使用）
 type PlatformTimeoutConfig struct {
-	TimeoutAll     int                  `mapstructure:"timeout_all"`     // 改为int类型（秒）
+	TimeoutAll     int                  `mapstructure:"timeout_all"` // 改为int类型（秒）
 	DialTimeoutSec int                  `mapstructure:"dial_timeout"`
 	AuthTimeoutSec int                  `mapstructure:"auth_timeout"`
 	Interact       InteractTimingConfig `mapstructure:"interact_timeout"`
@@ -526,34 +544,34 @@ type PlatformTimeoutConfig struct {
 
 // PlatformDefaultsConfig 平台默认交互/适配参数
 type PlatformDefaultsConfig struct {
-    PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
-    DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
-    AutoInteractions  []AutoInteractionConfig `mapstructure:"auto_interactions"`
-    ErrorHints        []string                `mapstructure:"error_hints"`
-    SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
-    EnableRequired    bool                    `mapstructure:"enable_required"`
+	PromptSuffixes    []string                `mapstructure:"prompt_suffixes"`
+	DisablePagingCmds []string                `mapstructure:"disable_paging_cmds"`
+	AutoInteractions  []AutoInteractionConfig `mapstructure:"auto_interactions"`
+	ErrorHints        []string                `mapstructure:"error_hints"`
+	SkipDelayedEcho   bool                    `mapstructure:"skip_delayed_echo"`
+	EnableRequired    bool                    `mapstructure:"enable_required"`
 
-    LongOutputCommands []string `mapstructure:"long_output_commands"`
+	LongOutputCommands []string `mapstructure:"long_output_commands"`
 
-    OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
+	OutputFilter OutputFilterConfig `mapstructure:"output_filter"`
 
-    Interact InteractConfig `mapstructure:"interact"`
+	Interact InteractConfig `mapstructure:"interact"`
 
-    EnableCLI          string `mapstructure:"enable_cli"`
+	EnableCLI          string `mapstructure:"enable_cli"`
 	EnableExceptOutput string `mapstructure:"enable_except_output"`
 
 	ConfigModeCLIs []string `mapstructure:"config_mode_clis"`
 
 	ConfigExitCLI string `mapstructure:"config_exit_cli"`
 
-	CommandIntervalMS         int `mapstructure:"command_interval_ms"`
-	CommandTimeoutSec         int `mapstructure:"command_timeout_sec"`
-	QuietAfterMS              int `mapstructure:"quiet_after_ms"`
-	QuietPollIntervalMS       int `mapstructure:"quiet_poll_interval_ms"`
-	EnablePasswordFallbackMS  int `mapstructure:"enable_password_fallback_ms"`
-	PromptInducerIntervalMS   int `mapstructure:"prompt_inducer_interval_ms"`
-	PromptInducerMaxCount     int `mapstructure:"prompt_inducer_max_count"`
-	ExitPauseMS               int `mapstructure:"exit_pause_ms"`
+	CommandIntervalMS        int `mapstructure:"command_interval_ms"`
+	CommandTimeoutSec        int `mapstructure:"command_timeout_sec"`
+	QuietAfterMS             int `mapstructure:"quiet_after_ms"`
+	QuietPollIntervalMS      int `mapstructure:"quiet_poll_interval_ms"`
+	EnablePasswordFallbackMS int `mapstructure:"enable_password_fallback_ms"`
+	PromptInducerIntervalMS  int `mapstructure:"prompt_inducer_interval_ms"`
+	PromptInducerMaxCount    int `mapstructure:"prompt_inducer_max_count"`
+	ExitPauseMS              int `mapstructure:"exit_pause_ms"`
 
 	Timeout PlatformTimeoutConfig `mapstructure:"timeout"`
 }

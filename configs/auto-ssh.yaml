@@ -31,7 +31,7 @@ collector:
               exit_pause_ms: 200
               prompt_inducer_interval_ms: 300
               prompt_inducer_max_count: 3
-              quiet_after_ms: 400
+              quiet_after_ms: 2500
               quiet_poll_interval_ms: 50
           timeout_all: 60
     cisco_ios:
@@ -76,18 +76,18 @@ collector:
           - '#'
       skip_delayed_echo: true
       timeout:
-          auth_timeout: 5
-          dial_timeout: 2
+          auth_timeout: 3
+          dial_timeout: 1
           interact_timeout:
               command_interval_ms: 120
               command_timeout_sec: 30
               enable_password_fallback_ms: 1500
               exit_pause_ms: 150
               prompt_inducer_interval_ms: 1000
-              prompt_inducer_max_count: 12
-              quiet_after_ms: 800
+              prompt_inducer_max_count: 60
+              quiet_after_ms: 2500
               quiet_poll_interval_ms: 250
-          timeout_all: 60
+          timeout_all: 120
     h3c:
       config_exit_cli: quit
       config_mode_clis:
@@ -121,6 +121,10 @@ collector:
           - '#'
           - ']'
       skip_delayed_echo: true
+      timeout:
+          interact_timeout:
+              quiet_after_ms: 2500
+              quiet_poll_interval_ms: 250
     huawei:
       config_exit_cli: quit
       config_mode_clis:
@@ -165,7 +169,7 @@ collector:
               exit_pause_ms: 150
               prompt_inducer_interval_ms: 1000
               prompt_inducer_max_count: 12
-              quiet_after_ms: 800
+              quiet_after_ms: 2500
               quiet_poll_interval_ms: 250
           timeout_all: 45
     linux:

@@ -77,14 +77,14 @@ type InteractiveOptions struct {
 	CommandIntervalMS    int
 	PerCommandTimeoutSec int
 	QuietAfterMS         int
-    QuietPollIntervalMS  int
-    // enable 密码回退与提示符诱发器
-    EnablePasswordFallbackMS int
-    PromptInducerIntervalMS  int
-    PromptInducerMaxCount    int
-    // 条件退出配置模式
-    ConfigExitConditional bool
-    LongOutputCommands []string
+	QuietPollIntervalMS  int
+	// enable 密码回退与提示符诱发器
+	EnablePasswordFallbackMS int
+	PromptInducerIntervalMS  int
+	PromptInducerMaxCount    int
+	// 条件退出配置模式
+	ConfigExitConditional bool
+	LongOutputCommands    []string
 }
 
 // AutoInteraction 自动交互对
@@ -341,10 +341,10 @@ func (c *Client) ExecuteCommand(ctx context.Context, command string) (*CommandRe
 	case <-done:
 		result.Duration = time.Since(startTime)
 		result.Output = util.EnsureUTF8Bytes(output)
-		
+
 		// Debug日志：记录命令回显的head/tail-lines
 		logger.DebugCommandOutput(command, result.Output, 5)
-		
+
 		if cmdErr != nil {
 			result.Error = cmdErr.Error()
 			if exitError, ok := cmdErr.(*ssh.ExitError); ok {
@@ -921,23 +921,23 @@ StartCommands:
 			enableFallback = time.After(fallbackDelay)
 		}
 		// 针对长输出命令（如 Cisco "show running-config"），禁用静默完成以避免只收首行
-        isLongOutputCmd := func(curr string) bool {
-            c := strings.ToLower(strings.TrimSpace(curr))
-            if opts != nil && len(opts.LongOutputCommands) > 0 {
-                for _, pat := range opts.LongOutputCommands {
-                    p := strings.ToLower(strings.TrimSpace(pat))
-                    if p != "" {
-                        if strings.HasPrefix(c, p) || c == p {
-                            return true
-                        }
-                    }
-                }
-            }
-            if strings.HasPrefix(c, "show run") || strings.HasPrefix(c, "show running-config") {
-                return true
-            }
-            return false
-        }
+		isLongOutputCmd := func(curr string) bool {
+			c := strings.ToLower(strings.TrimSpace(curr))
+			if opts != nil && len(opts.LongOutputCommands) > 0 {
+				for _, pat := range opts.LongOutputCommands {
+					p := strings.ToLower(strings.TrimSpace(pat))
+					if p != "" {
+						if strings.HasPrefix(c, p) || c == p {
+							return true
+						}
+					}
+				}
+			}
+			if strings.HasPrefix(c, "show run") || strings.HasPrefix(c, "show running-config") {
+				return true
+			}
+			return false
+		}
 		// 判断是否为Linux平台的sudo命令
 		isLinuxSudoCmd := func(curr string) bool {
 			if opts == nil || opts.DevicePlatform == "" {
@@ -950,19 +950,32 @@ StartCommands:
 			// 检查是否为sudo相关的提权命令
 			return isEnableCmd(curr) && strings.Contains(strings.ToLower(strings.TrimSpace(opts.EnableCLI)), "sudo")
 		}
+		// 识别允许静默完成的命令（即使被视为长输出）：ping/traceroute
+		isPingCmd := func(curr string) bool {
+			s := strings.ToLower(strings.TrimSpace(curr))
+			return strings.HasPrefix(s, "ping")
+		}
+		isTracerouteCmd := func(curr string) bool {
+			s := strings.ToLower(strings.TrimSpace(curr))
+			return strings.HasPrefix(s, "traceroute") || strings.HasPrefix(s, "trace")
+		}
 		// 禁用提权命令的静默完成，防止在等待密码/进入特权时提前结束
 		// 对于Linux平台的sudo命令，也禁用3秒无输出检测，因为sudo可能需要更长时间等待密码输入
 		quietCompleteAllowed := !(isLongOutputCmd(cmd) || isEnableCmd(cmd) || isLinuxSudoCmd(cmd))
-		// 静默检测轮询间隔（可调）
+		// 特例：ping/traceroute 在很多设备上会存在首行后长时间无换行输出（直到最终统计行）
+		// 为避免在“发送提示+长静默”阶段被误判为完成，这里禁用其静默完成
+		if isPingCmd(cmd) || isTracerouteCmd(cmd) {
+			quietCompleteAllowed = false
+		}
 		quietPoll := 250 * time.Millisecond
 		if opts != nil && opts.QuietPollIntervalMS > 0 {
 			quietPoll = time.Duration(opts.QuietPollIntervalMS) * time.Millisecond
 		}
-		// 单条命令超时（可调）
 		perCmdTimeout := 30 * time.Second
 		if opts != nil && opts.PerCommandTimeoutSec > 0 {
 			perCmdTimeout = time.Duration(opts.PerCommandTimeoutSec) * time.Second
 		}
+		timeoutTimer := time.NewTimer(perCmdTimeout)
 		for {
 			select {
 			case <-ctx.Done():
@@ -1069,6 +1082,22 @@ StartCommands:
 				outLineCount++
 				if strings.TrimSpace(clean) != "" {
 					sawContent = true
+				}
+
+				if isPingCmd(cmd) {
+					lc := strings.ToLower(clean)
+					if strings.Contains(lc, "success rate") || strings.Contains(lc, "round-trip") || strings.Contains(lc, "min/avg/max") {
+						result := &CommandResult{
+							Command:  cmd,
+							Output:   util.EnsureUTF8(out.String()),
+							Error:    "",
+							ExitCode: 0,
+							Duration: time.Since(cmdStart),
+						}
+						results = append(results, result)
+						logger.DebugCommandOutput(cmd, result.Output, 5)
+						goto NextCmd
+					}
 				}
 
 				// 在执行 enable 时，遇到密码提示则自动输入密码
@@ -1188,20 +1217,20 @@ StartCommands:
 					// 跳转到NextCmd处理下一个命令
 					goto NextCmd
 				}
-			// 静默完成检测：在已经读取到内容(sawContent)的情况下，如果持续一段时间未再收到输出，认为命令已完成
-			// 该逻辑可以避免因提示符识别失败导致的“总是等到整体超时”问题
+				// 静默完成检测：在已经读取到内容(sawContent)的情况下，如果持续一段时间未再收到输出，认为命令已完成
+				// 该逻辑可以避免因提示符识别失败导致的“总是等到整体超时”问题
 			case <-time.After(quietPoll):
 				// 修复：对于无输出命令（如terminal length 0），在命令启动后足够时间内未收到任何输出，也认为完成
 				timeSinceStart := time.Since(cmdStart)
 				timeSinceLastRecv := time.Since(lastRecvAt)
-				
+
 				// 条件1：有输出内容且静默时间足够 (原逻辑)
 				hasContentAndQuiet := sawContent && timeSinceLastRecv >= quietAfter
-				
+
 				// 条件2：无输出命令检测 - 命令启动后3秒内未收到任何输出，且不是长输出命令
 				// 特别排除Linux平台的sudo命令，因为sudo需要等待用户输入密码
 				isNoOutputCmd := !sawContent && timeSinceStart >= 3*time.Second && quietCompleteAllowed && !isLinuxSudoCmd(cmd)
-				
+
 				if hasContentAndQuiet || isNoOutputCmd {
 					// 针对长输出命令，禁止静默完成，避免在首行后短暂空档提前结束
 					if !quietCompleteAllowed {
@@ -1231,7 +1260,7 @@ StartCommands:
 				}
 				// 若未达到静默完成条件，继续等待
 				continue
-			case <-time.After(perCmdTimeout):
+			case <-timeoutTimer.C:
 				// 超时保护：将当前已读作为输出返回
 				result := &CommandResult{
 					Command:  cmd,
@@ -1248,6 +1277,12 @@ StartCommands:
 			}
 		}
 	NextCmd:
+		if !timeoutTimer.Stop() {
+			select {
+			case <-timeoutTimer.C:
+			default:
+			}
+		}
 		logger.Debugf("SSH Interactive: command finished: %s; duration=%s; bytes=%d", cmd, time.Since(cmdStart), len(out.String()))
 		// 离开当前命令后恢复提示符前缀检查
 		relaxPromptPrefix = false

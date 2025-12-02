@@ -80,7 +80,7 @@ collector:
           quiet_after_ms: 800
           quiet_poll_interval_ms: 250
           prompt_inducer_interval_ms: 1000
-          prompt_inducer_max_count: 12
+          prompt_inducer_max_count: 30
           enable_password_fallback_ms: 1500
       output_filter:
         prefixes:
@@ -276,9 +276,9 @@ log:
   compress: true
   modules:
     collector:
-      level: "debug"
+      level: "info"
     simulate:
-      level: "debug"
+      level: "info"
 
 # 采集数据存储（运行时可覆盖默认值）
 storage:
