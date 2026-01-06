@@ -12,15 +12,15 @@ import "time"
 // 注意：ID 为自增主键，仅用于后台标识，不在页面展示
 
 type DeviceType struct {
-    ID        uint      `gorm:"primaryKey" json:"id"`
-    Vendor    string    `gorm:"not null" json:"vendor"`
-    System    string    `gorm:"not null" json:"system"`
-    Kind      string    `gorm:"not null" json:"kind"`
-    Tag       string    `gorm:"not null;default:default" json:"tag"`
-    SSHType   string    `gorm:"column:ssh_type;not null" json:"ssh_type"`
-    Enabled   bool      `gorm:"not null;default:true" json:"enabled"`
-    CreatedAt time.Time `json:"created_at"`
-    UpdatedAt time.Time `json:"updated_at"`
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Vendor    string    `gorm:"not null" json:"vendor"`
+	System    string    `gorm:"not null" json:"system"`
+	Kind      string    `gorm:"not null" json:"kind"`
+	Tag       string    `gorm:"not null;default:default" json:"tag"`
+	SSHType   string    `gorm:"column:ssh_type;not null" json:"ssh_type"`
+	Enabled   bool      `gorm:"not null;default:true" json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (DeviceType) TableName() string { return "device_types" }

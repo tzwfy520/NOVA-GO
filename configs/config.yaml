@@ -272,21 +272,30 @@ log:
   file_path: "./logs/collector.log"
   max_size: 100  # MB
   max_backups: 5
-  max_age: 7  # days
+  max_age: 30  # days
   compress: true
   modules:
     collector:
       level: "info"
     simulate:
       level: "info"
+  task_logs:
+    enabled: true
+    retention_days: 7
+    max_files: 5000
+    max_total_size_mb: 2048
+    scan_interval: 30m
+    directories:
+      - "./logs/collection"
+      - "./logs/backup"
 
 # 采集数据存储（运行时可覆盖默认值）
 storage:
   minio:
-    host: "139.196.196.96"
-    port: 29000
-    access_key: "minioadmin"
-    secret_key: "Eccom@2024"
+    host: "xxxx"
+    port: 9000
+    access_key: "xxxx"
+    secret_key: "xxxx"
     bucket: "sshcollector-raw"
     secure: false
   postgres:

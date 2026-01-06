@@ -9,7 +9,7 @@ import "time"
 
 type CollectorSettings struct {
 	ID        uint      `gorm:"primaryKey"`
-	RetryFlag int       `gorm:"not null;default:0"` // 重试次数
+	RetryFlag int       `gorm:"not null;default:0"`  // 重试次数
 	Timeout   int       `gorm:"not null;default:30"` // 任务超时（秒）
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 }

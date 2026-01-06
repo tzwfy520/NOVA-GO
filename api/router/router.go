@@ -3,9 +3,11 @@ package router
 import (
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/sshcollectorpro/sshcollectorpro/api/handler"
 	"github.com/sshcollectorpro/sshcollectorpro/internal/service"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
@@ -20,8 +22,7 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 	r := gin.New()
 
 	// 添加中间件
-	r.Use(gin.Logger())
-	r.Use(gin.Recovery())
+	r.Use(RecoveryMiddleware())
 	r.Use(CORSMiddleware())
 	r.Use(RequestIDMiddleware())
 	r.Use(LoggingMiddleware())
@@ -195,12 +196,39 @@ func SetupRouter(collectorService *service.CollectorService, backupService *serv
 	return r
 }
 
+func RecoveryMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				requestID := c.GetString("request_id")
+				logger.Error(
+					"HTTP Panic",
+					"request_id", requestID,
+					"method", c.Request.Method,
+					"path", c.Request.URL.Path,
+					"client_ip", c.ClientIP(),
+					"panic", fmt.Sprintf("%v", rec),
+					"stack", string(debug.Stack()),
+				)
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+					"code":    "INTERNAL_ERROR",
+					"message": "服务器内部错误",
+				})
+			}
+		}()
+		c.Next()
+	}
+}
+
 // CORSMiddleware 跨域中间件
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Request-ID")
+		c.Header(
+			"Access-Control-Allow-Headers",
+			"Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Request-ID",
+		)
 		c.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 
 		if c.Request.Method == "OPTIONS" {

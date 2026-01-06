@@ -16,12 +16,26 @@
 
 ### 全局超时配置
 
-在 `ssh` 部分配置全局超时参数：
+在 `ssh` 部分配置全局超时参数（推荐使用 `ssh.timeout.*` 的新结构）：
 
 ```yaml
 ssh:
-  timeout: 30s  # 全局SSH连接和命令执行超时时间
+  timeout:
+    timeout_all: 60  # 系统强制中断窗口（秒，默认60）
+    dial_timeout: 2  # 拨号阶段超时（秒，默认2）
+    auth_timeout: 5  # 握手/认证阶段超时（秒，默认5）
+    interact_timeout:
+      command_interval_ms: 120
+      command_timeout_sec: 30
+      quiet_after_ms: 800
+      quiet_poll_interval_ms: 250
+      prompt_inducer_interval_ms: 1000
+      prompt_inducer_max_count: 12
+      exit_pause_ms: 150
+      enable_password_fallback_ms: 1500
 ```
+
+兼容说明：旧配置 `ssh.timeout: 30s` 仍可被读取为全局 `timeout_all`（仅当未设置 `ssh.timeout.timeout_all` 时生效）。
 
 ### 平台特定超时配置
 
@@ -56,15 +70,27 @@ collector:
 系统按以下优先级选择超时时间：
 
 1. **平台特定配置**: 如果为设备平台配置了 `timeout_all`，优先使用该值
-2. **全局SSH配置**: 如果没有平台特定配置，使用 `ssh.timeout` 转换为秒数
-3. **系统默认值**: 如果以上都未配置，使用默认的60秒
+2. **全局SSH配置**: 如果没有平台特定配置，使用 `ssh.timeout.timeout_all`（或兼容旧键 `ssh.timeout`）
+3. **兜底回退**: 若全局也未配置，则回退到 `ssh.connect_timeout`（若设置）或默认 60 秒
 
 #### 配置示例
 
 ```yaml
 # 完整配置示例
 ssh:
-  timeout: 30s  # 全局超时30秒
+  timeout:
+    timeout_all: 30  # 全局超时30秒（秒）
+    dial_timeout: 2
+    auth_timeout: 5
+    interact_timeout:
+      command_interval_ms: 120
+      command_timeout_sec: 30
+      quiet_after_ms: 800
+      quiet_poll_interval_ms: 250
+      prompt_inducer_interval_ms: 1000
+      prompt_inducer_max_count: 12
+      exit_pause_ms: 150
+      enable_password_fallback_ms: 1500
 
 collector:
   max_workers: 10
@@ -116,6 +142,22 @@ collector:
 - 超时中断次数
 
 可通过 `/api/v1/collector/stats` 接口查询这些统计数据。
+
+### interact_timeout 参数说明
+
+`interact_timeout` 用于控制“交互会话内”的节奏与判定策略，既支持全局配置，也支持平台覆盖：
+
+- **全局**：`ssh.timeout.interact_timeout.*`
+- **平台覆盖**：`collector.device_defaults.<platform>.timeout.interact_timeout.*`（只覆盖设置了的字段，其余字段沿用全局）
+
+常用字段：
+
+- `command_interval_ms`：命令发送间隔（ms）
+- `command_timeout_sec`：单命令超时（秒）
+- `quiet_after_ms` / `quiet_poll_interval_ms`：静默完成判定
+- `prompt_inducer_interval_ms` / `prompt_inducer_max_count`：首次提示符诱发节奏（仅会话启动阶段）
+- `enable_password_fallback_ms`：enable 密码回退发送延迟（ms）
+- `exit_pause_ms`：退出节奏（ms）
 
 ## 其他配置参数
 

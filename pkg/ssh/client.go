@@ -3,16 +3,46 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/util"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-	"golang.org/x/crypto/ssh"
 )
+
+func readPipeLines(r io.Reader, lineCh chan<- string, wg *sync.WaitGroup) {
+	if wg != nil {
+		defer wg.Done()
+	}
+	buf := make([]byte, 2048)
+	var acc strings.Builder
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			acc.Write(buf[:n])
+			s := acc.String()
+			s = strings.ReplaceAll(s, "\r\n", "\n")
+			s = strings.ReplaceAll(s, "\r", "")
+			lines := strings.Split(s, "\n")
+			acc.Reset()
+			if len(lines) > 0 {
+				acc.WriteString(lines[len(lines)-1])
+			}
+			for i := 0; i < len(lines)-1; i++ {
+				lineCh <- lines[i]
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+}
 
 // Config SSH配置
 type Config struct {
@@ -174,10 +204,6 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 		}
 	}
 
-	if info.KeyFile != "" {
-		// TODO: 实现密钥文件认证
-	}
-
 	// 连接SSH服务器
 	// 构造地址（兼容 IPv6，处理 0.0.0.0/:: 映射到本地回环）
 	host := strings.TrimSpace(info.Host)
@@ -242,8 +268,8 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 	_ = conn.SetDeadline(time.Time{})
 	logger.Debug("SSH Connect: handshake success; deadline cleared")
 
-	// 启动保活机制
-	go c.keepAlive(ctx)
+	// 启动保活机制 (使用独立上下文，避免因连接上下文超时而导致保活停止)
+	go c.keepAlive(context.Background())
 
 	return nil
 }
@@ -253,7 +279,11 @@ func (c *Client) Connect(ctx context.Context, info *ConnectionInfo) error {
 // "ssh: rejected: administratively prohibited (open failed)" 的情况，
 // 进行短延迟重试以提高稳定性。
 func (c *Client) newSessionWithRetry() (*ssh.Session, error) {
-	if c.connection == nil {
+	c.mutex.RLock()
+	conn := c.connection
+	c.mutex.RUnlock()
+
+	if conn == nil {
 		return nil, fmt.Errorf("SSH connection not established")
 	}
 
@@ -265,42 +295,56 @@ func (c *Client) newSessionWithRetry() (*ssh.Session, error) {
 		if d > 0 {
 			time.Sleep(d)
 		}
-		sess, err := c.connection.NewSession()
+
+		// 每次尝试前重新获取连接（因为可能发生了重连）
+		c.mutex.RLock()
+		currConn := c.connection
+		c.mutex.RUnlock()
+
+		var sess *ssh.Session
+		var err error
+
+		if currConn != nil {
+			sess, err = currConn.NewSession()
+		} else {
+			err = fmt.Errorf("SSH connection lost")
+		}
+
 		if err == nil {
 			logger.Debugf("SSH newSession: attempt %d succeeded", i+1)
 			return sess, nil
 		}
 		lastErr = err
 		logger.Debugf("SSH newSession: attempt %d failed: %v", i+1, err)
-		// 若错误不是通道被管理拒绝/打开失败，继续有限次重试以防瞬时状态
-		// 主要针对 "administratively prohibited"/"open failed" 文案做退避
+
 		msg := strings.ToLower(err.Error())
-		// 包含 EOF 也作为可重试错误（部分设备在登录后短时间内打开会话会返回 EOF）
-		if strings.Contains(msg, "eof") && c.info != nil {
+		// 统一处理断开连接类的错误，触发重连机制
+		// 包含 EOF、disconnect、out of context、message type 97 等
+		shouldReconnect := (strings.Contains(msg, "eof") ||
+			strings.Contains(msg, "disconnect") ||
+			strings.Contains(msg, "out of context") ||
+			strings.Contains(msg, "message type 97"))
+
+		if shouldReconnect && c.info != nil {
 			// 尝试一次自动重连：关闭旧连接后根据保存的参数重建连接
-			// 使用 SSH 配置的 Timeout 作为重连的超时窗口
 			_ = c.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), c.config.ConnectTimeout)
-			// 忽略重连错误并继续后续退避，如果重连成功则下一次循环可能成功创建会话
-			_ = c.Connect(ctx, c.info)
+			// 关键修复：检查重连结果
+			connErr := c.Connect(ctx, c.info)
 			cancel()
+
+			if connErr != nil {
+				logger.Warnf("SSH newSession: reconnect failed: %v", connErr)
+				// 重连失败不直接返回，继续下一次退避循环（如果还有机会）
+			} else {
+				logger.Debug("SSH newSession: reconnect success")
+			}
+
 			// 短暂等待以让设备端就绪
 			time.Sleep(200 * time.Millisecond)
-			logger.Debug("SSH newSession: reconnect after EOF triggered")
-			// 继续进入下一次退避尝试
 			continue
 		}
-		// 处理断开类错误：例如 "ssh: disconnect, reason 2: Out of context message type 97"
-		if (strings.Contains(msg, "disconnect") || strings.Contains(msg, "out of context") || strings.Contains(msg, "message type 97")) && c.info != nil {
-			_ = c.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), c.config.ConnectTimeout)
-			_ = c.Connect(ctx, c.info)
-			cancel()
-			time.Sleep(200 * time.Millisecond)
-			logger.Debug("SSH newSession: reconnect after disconnect/type97 triggered")
-			continue
-		}
-		// 非典型错误也尝试后续退避，但不额外处理
+		// 非断开类错误也尝试后续退避，但不触发重连
 	}
 	return nil, lastErr
 }
@@ -478,7 +522,7 @@ func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, 
 		for _, response := range responses {
 			time.Sleep(100 * time.Millisecond) // 等待命令准备
 			// 网络设备通常期望 CRLF
-			stdin.Write([]byte(response + "\r\n"))
+			_, _ = stdin.Write([]byte(response + "\r\n"))
 		}
 	}()
 
@@ -516,7 +560,7 @@ func (c *Client) ExecuteInteractiveCommand(ctx context.Context, command string, 
 		result.ExitCode = 0
 		return result, nil
 	case <-ctx.Done():
-		session.Signal(ssh.SIGTERM)
+		_ = session.Signal(ssh.SIGTERM)
 		result.Duration = time.Since(startTime)
 		result.Output = util.EnsureUTF8(output.String())
 		result.Error = "command timeout"
@@ -608,8 +652,14 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 
 	logger.Debug("SSH Interactive: shell started; sending CRLF to elicit prompt")
 
+	writeStdin := func(s string) {
+		if _, werr := stdin.Write([]byte(s)); werr != nil {
+			logger.Error("Failed to write to stdin", "error", werr)
+		}
+	}
+
 	// 发送 CRLF 促使设备输出当前提示符，便于后续检测（网络设备通常期望 CRLF）
-	stdin.Write([]byte("\r\n"))
+	writeStdin("\r\n")
 
 	// 提示符诱发参数
 	piInterval := 1000 * time.Millisecond
@@ -625,7 +675,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 
 	stopTrigger := make(chan struct{})
 	go func() {
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 		ticker := time.NewTicker(piInterval)
 		defer ticker.Stop()
 		count := 0
@@ -637,7 +687,7 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 				if count >= piMax {
 					return
 				}
-				stdin.Write([]byte("\r\n"))
+				_, _ = stdin.Write([]byte("\r\n"))
 				count++
 			}
 		}
@@ -646,63 +696,13 @@ func (c *Client) ExecuteInteractiveCommands(ctx context.Context, commands []stri
 	// 读取输出的协程，将数据按行推送到通道
 	lineCh := make(chan string, 4096)
 	doneCh := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go readPipeLines(stdout, lineCh, &wg)
+	go readPipeLines(stderr, lineCh, &wg)
 	go func() {
-		defer close(doneCh)
-		buf := make([]byte, 2048)
-		var acc strings.Builder
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				acc.Write(buf[:n])
-				s := acc.String()
-				// 统一换行符：仅将 CRLF -> \n；保留孤立 CR 作为行续行（去除），避免将回车误判为换行
-				s = strings.ReplaceAll(s, "\r\n", "\n")
-				s = strings.ReplaceAll(s, "\r", "")
-				// 按换行切分
-				lines := strings.Split(s, "\n")
-				// 保留最后一部分(可能不完整)
-				acc.Reset()
-				if len(lines) > 0 {
-					acc.WriteString(lines[len(lines)-1])
-				}
-				for i := 0; i < len(lines)-1; i++ {
-					line := lines[i]
-					// 阻塞推送，避免丢失关键信息（例如提示符）
-					lineCh <- line
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-
-	// 同步读取 stderr，合并到同一行通道进行提示符检测
-	go func() {
-		buf := make([]byte, 2048)
-		var acc strings.Builder
-		for {
-			n, err := stderr.Read(buf)
-			if n > 0 {
-				acc.Write(buf[:n])
-				s := acc.String()
-				// 统一换行符：仅将 CRLF -> \n；孤立 CR 去除，避免命令回显被拆成多行
-				s = strings.ReplaceAll(s, "\r\n", "\n")
-				s = strings.ReplaceAll(s, "\r", "")
-				lines := strings.Split(s, "\n")
-				acc.Reset()
-				if len(lines) > 0 {
-					acc.WriteString(lines[len(lines)-1])
-				}
-				for i := 0; i < len(lines)-1; i++ {
-					line := lines[i]
-					lineCh <- line
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
+		wg.Wait()
+		close(doneCh)
 	}()
 
 	// 辅助函数：清洗行内容，移除 ANSI 转义序列与不可见控制符，便于稳定提示符检测
@@ -1126,7 +1126,7 @@ StartCommands:
 									pwdToSend = lp
 								}
 							}
-							stdin.Write([]byte(pwdToSend + "\r\n"))
+							writeStdin(pwdToSend + "\r\n")
 							enableFallbackSent = true
 							// 标记提权完成并取消回退通道，避免密码被误当作下一条命令
 							enableDone = true
@@ -1147,7 +1147,7 @@ StartCommands:
 									pwdToSend = lp
 								}
 							}
-							stdin.Write([]byte(pwdToSend + "\r\n"))
+							writeStdin(pwdToSend + "\r\n")
 							enableFallbackSent = true
 							// 标记提权完成并取消回退通道，避免密码被误当作下一条命令
 							enableDone = true
@@ -1172,7 +1172,7 @@ StartCommands:
 							if !sorryRetryDone {
 								lp := strings.TrimSpace(opts.LoginPassword)
 								if lp != "" {
-									stdin.Write([]byte(lp + "\r\n"))
+									writeStdin(lp + "\r\n")
 									sorryRetryDone = true
 									// 不立即结束，继续等待提示符，以确保进入特权模式
 									continue
@@ -1189,7 +1189,7 @@ StartCommands:
 							continue
 						}
 						if strings.Contains(lower, strings.ToLower(ai.ExpectOutput)) {
-							stdin.Write([]byte(ai.AutoSend + "\r\n"))
+							writeStdin(ai.AutoSend + "\r\n")
 							// 命中后标记不再重复自动执行
 							autoInteractDone = true
 							break
@@ -1207,7 +1207,7 @@ StartCommands:
 							pwdToSend = lp
 						}
 					}
-					stdin.Write([]byte(pwdToSend + "\r\n"))
+					writeStdin(pwdToSend + "\r\n")
 					enableFallbackSent = true
 					// 密码发送后等待足够时间让设备处理，避免与下一条命令时序冲突
 					time.Sleep(500 * time.Millisecond)
@@ -1301,7 +1301,7 @@ StartCommands:
 		exitSeq = opts.ExitCommands
 	}
 	for _, ec := range exitSeq {
-		stdin.Write([]byte(ec + "\r\n"))
+		writeStdin(ec + "\r\n")
 		// 退出命令发送间隔（可调）
 		exitPause := 150 * time.Millisecond
 		if opts != nil && opts.ExitPauseMS > 0 {
@@ -1472,7 +1472,7 @@ func (c *Client) DetectPrompt(ctx context.Context, promptSuffixes []string, opts
 
 	stop := make(chan struct{})
 	go func() {
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 		ticker := time.NewTicker(piInterval)
 		defer ticker.Stop()
 		count := 0
@@ -1484,7 +1484,7 @@ func (c *Client) DetectPrompt(ctx context.Context, promptSuffixes []string, opts
 				if count >= piMax {
 					return
 				}
-				stdin.Write([]byte("\r\n"))
+				_, _ = stdin.Write([]byte("\r\n"))
 				count++
 			}
 		}
@@ -1492,55 +1492,13 @@ func (c *Client) DetectPrompt(ctx context.Context, promptSuffixes []string, opts
 
 	lineCh := make(chan string, 2048)
 	doneCh := make(chan struct{})
-	// stdout reader
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go readPipeLines(stdout, lineCh, &wg)
+	go readPipeLines(stderr, lineCh, &wg)
 	go func() {
-		buf := make([]byte, 2048)
-		var acc strings.Builder
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				acc.Write(buf[:n])
-				s := acc.String()
-				s = strings.ReplaceAll(s, "\r\n", "\n")
-				s = strings.ReplaceAll(s, "\r", "")
-				lines := strings.Split(s, "\n")
-				acc.Reset()
-				if len(lines) > 0 {
-					acc.WriteString(lines[len(lines)-1])
-				}
-				for i := 0; i < len(lines)-1; i++ {
-					lineCh <- lines[i]
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-	// stderr reader
-	go func() {
-		buf := make([]byte, 2048)
-		var acc strings.Builder
-		for {
-			n, err := stderr.Read(buf)
-			if n > 0 {
-				acc.Write(buf[:n])
-				s := acc.String()
-				s = strings.ReplaceAll(s, "\r\n", "\n")
-				s = strings.ReplaceAll(s, "\r", "")
-				lines := strings.Split(s, "\n")
-				acc.Reset()
-				if len(lines) > 0 {
-					acc.WriteString(lines[len(lines)-1])
-				}
-				for i := 0; i < len(lines)-1; i++ {
-					lineCh <- lines[i]
-				}
-			}
-			if err != nil {
-				break
-			}
-		}
+		wg.Wait()
+		close(doneCh)
 	}()
 
 	// 行清洗：移除 ANSI 与不可见控制符

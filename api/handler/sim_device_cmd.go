@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
 	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-	"gorm.io/gorm"
 )
 
 // SimDeviceCmdHandler 针对命名空间与设备的模拟命令处理器
@@ -24,7 +25,9 @@ func NewSimDeviceCmdHandler() *SimDeviceCmdHandler { return &SimDeviceCmdHandler
 // 辅助：规范化命令文本（压缩空白并小写化，仅用于匹配，不更改存储原文）
 func normalizeCommand(s string) string {
 	s = strings.TrimSpace(s)
-	if s == "" { return s }
+	if s == "" {
+		return s
+	}
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\t", " ")
 	s = strings.Join(strings.Fields(s), " ")
@@ -35,10 +38,16 @@ func normalizeCommand(s string) string {
 func prefixMatchByWords(input string, candidate string) bool {
 	in := strings.Fields(normalizeCommand(input))
 	cand := strings.Fields(normalizeCommand(candidate))
-	if len(in) == 0 { return false }
-	if len(cand) < len(in) { return false }
+	if len(in) == 0 {
+		return false
+	}
+	if len(cand) < len(in) {
+		return false
+	}
 	for i := 0; i < len(in); i++ {
-		if !strings.HasPrefix(cand[i], in[i]) { return false }
+		if !strings.HasPrefix(cand[i], in[i]) {
+			return false
+		}
 	}
 	return true
 }
@@ -155,18 +164,28 @@ func (h *SimDeviceCmdHandler) UpdateSimDeviceCmd(c *gin.Context) {
 	}
 
 	newNS := strings.TrimSpace(req.Namespace)
-	if newNS == "" { newNS = item.Namespace }
+	if newNS == "" {
+		newNS = item.Namespace
+	}
 	newDev := strings.TrimSpace(req.DeviceName)
-	if newDev == "" { newDev = item.DeviceName }
+	if newDev == "" {
+		newDev = item.DeviceName
+	}
 	newCmd := strings.TrimSpace(req.Command)
-	if newCmd == "" { newCmd = item.Command }
+	if newCmd == "" {
+		newCmd = item.Command
+	}
 
 	// 查找是否存在另一条同设备同命令记录（忽略大小写）
 	var other model.SimDeviceCommand
 	if err := db.Where("namespace = ? AND device_name = ? AND LOWER(command) = LOWER(?)", newNS, newDev, newCmd).First(&other).Error; err == nil && other.ID != item.ID {
 		// 合并：更新另一个记录的输出与启用状态，删除当前记录
 		upd := map[string]interface{}{}
-		if strings.TrimSpace(req.Output) != "" { upd["output"] = req.Output } else { upd["output"] = item.Output }
+		if strings.TrimSpace(req.Output) != "" {
+			upd["output"] = req.Output
+		} else {
+			upd["output"] = item.Output
+		}
 		upd["enabled"] = req.Enabled
 		if err := database.WithRetry(func(d *gorm.DB) error { return d.Model(&other).Updates(upd).Error }, 6, 100*time.Millisecond); err != nil {
 			logger.Error("Merge sim device command failed", "error", err)
@@ -180,10 +199,18 @@ func (h *SimDeviceCmdHandler) UpdateSimDeviceCmd(c *gin.Context) {
 
 	// 正常更新当前记录
 	update := map[string]interface{}{}
-	if newNS != item.Namespace { update["namespace"] = newNS }
-	if newDev != item.DeviceName { update["device_name"] = newDev }
-	if newCmd != item.Command { update["command"] = newCmd }
-	if strings.TrimSpace(req.Output) != "" { update["output"] = req.Output }
+	if newNS != item.Namespace {
+		update["namespace"] = newNS
+	}
+	if newDev != item.DeviceName {
+		update["device_name"] = newDev
+	}
+	if newCmd != item.Command {
+		update["command"] = newCmd
+	}
+	if strings.TrimSpace(req.Output) != "" {
+		update["output"] = req.Output
+	}
 	update["enabled"] = req.Enabled
 	if err := database.WithRetry(func(d *gorm.DB) error { return d.Model(&item).Updates(update).Error }, 6, 100*time.Millisecond); err != nil {
 		logger.Error("Update sim device command failed", "error", err)
@@ -213,10 +240,10 @@ func (h *SimDeviceCmdHandler) DeleteSimDeviceCmd(c *gin.Context) {
 // 新增：按命名空间与设备进行命令模糊匹配，返回模拟回显或候选列表
 func (h *SimDeviceCmdHandler) MatchSimDeviceCmd(c *gin.Context) {
 	var req struct {
-		Namespace  string `json:"namespace"`
-		DeviceName string `json:"device_name"`
-		Command    string `json:"command"`
-		EnabledOnly bool  `json:"enabled_only"`
+		Namespace   string `json:"namespace"`
+		DeviceName  string `json:"device_name"`
+		Command     string `json:"command"`
+		EnabledOnly bool   `json:"enabled_only"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "INVALID_PARAMS", "message": "参数错误: " + err.Error()})
@@ -233,7 +260,9 @@ func (h *SimDeviceCmdHandler) MatchSimDeviceCmd(c *gin.Context) {
 	db := database.GetDB()
 	var items []model.SimDeviceCommand
 	q := db.Where("namespace = ? AND device_name = ?", ns, dev)
-	if req.EnabledOnly { q = q.Where("enabled = 1") }
+	if req.EnabledOnly {
+		q = q.Where("enabled = 1")
+	}
 	if err := q.Find(&items).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "DB_ERROR", "message": "查询失败: " + err.Error()})
 		return
@@ -265,7 +294,7 @@ func (h *SimDeviceCmdHandler) MatchSimDeviceCmd(c *gin.Context) {
 		var lines []string
 		lines = append(lines, "which command do you mean?")
 		for _, it := range candidates {
-			lines = append(lines, " -- " + strings.TrimSpace(it.Command))
+			lines = append(lines, " -- "+strings.TrimSpace(it.Command))
 		}
 		c.JSON(http.StatusOK, gin.H{"code": "SUCCESS", "message": "partial_multi", "data": gin.H{"match_type": "partial_multi", "output": strings.Join(lines, "\n")}})
 		return

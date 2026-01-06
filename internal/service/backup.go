@@ -19,6 +19,7 @@ import (
 
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
@@ -403,12 +404,11 @@ func (w *MinioStorageWriter) fastConnectivityCheck(parent context.Context) error
 	return nil
 }
 
-// ensureBucket 校验并创建 bucket，支持有限重试
-func (w *MinioStorageWriter) ensureBucket(parent context.Context, bucket string, retries int) error {
+func ensureMinioBucket(parent context.Context, client *minio.Client, bucket string, retries int, attemptContext func(context.Context, time.Duration) (context.Context, context.CancelFunc)) error {
 	var lastErr error
 	for i := 0; i <= retries; i++ {
-		ctx, cancel := w.attemptContext(parent, 10*time.Second)
-		exists, err := w.client.BucketExists(ctx, bucket)
+		ctx, cancel := attemptContext(parent, 10*time.Second)
+		exists, err := client.BucketExists(ctx, bucket)
 		cancel()
 		if err != nil {
 			lastErr = err
@@ -418,8 +418,8 @@ func (w *MinioStorageWriter) ensureBucket(parent context.Context, bucket string,
 		if exists {
 			return nil
 		}
-		ctx2, cancel2 := w.attemptContext(parent, 10*time.Second)
-		if mkErr := w.client.MakeBucket(ctx2, bucket, minio.MakeBucketOptions{}); mkErr != nil {
+		ctx2, cancel2 := attemptContext(parent, 10*time.Second)
+		if mkErr := client.MakeBucket(ctx2, bucket, minio.MakeBucketOptions{}); mkErr != nil {
 			lastErr = mkErr
 			cancel2()
 			time.Sleep(time.Duration(i+1) * time.Second)
@@ -432,6 +432,11 @@ func (w *MinioStorageWriter) ensureBucket(parent context.Context, bucket string,
 		return lastErr
 	}
 	return fmt.Errorf("bucket ensure failed for %s", bucket)
+}
+
+// ensureBucket 校验并创建 bucket，支持有限重试
+func (w *MinioStorageWriter) ensureBucket(parent context.Context, bucket string, retries int) error {
+	return ensureMinioBucket(parent, w.client, bucket, retries, w.attemptContext)
 }
 
 // attemptContext 构造限时上下文，尊重父上下文的剩余截止时间
@@ -469,11 +474,14 @@ func applyLineFilter(f config.OutputFilterConfig, s string) string {
 		matched := false
 		for _, p := range f.Prefixes {
 			pv := p
+			if f.TrimSpace {
+				pv = strings.TrimSpace(pv)
+			}
 			if f.CaseInsensitive {
 				pv = strings.ToLower(pv)
 			}
-			if f.TrimSpace {
-				cmp = strings.TrimSpace(cmp)
+			if pv == "" {
+				continue
 			}
 			if strings.HasPrefix(cmp, pv) {
 				matched = true
@@ -483,8 +491,14 @@ func applyLineFilter(f config.OutputFilterConfig, s string) string {
 		if !matched {
 			for _, c := range f.Contains {
 				cv := c
+				if f.TrimSpace {
+					cv = strings.TrimSpace(cv)
+				}
 				if f.CaseInsensitive {
 					cv = strings.ToLower(cv)
+				}
+				if cv == "" {
+					continue
 				}
 				if strings.Contains(cmp, cv) {
 					matched = true
@@ -501,36 +515,15 @@ func applyLineFilter(f config.OutputFilterConfig, s string) string {
 
 // getOutputFilterForPlatform 返回平台对应的输出过滤配置；若平台未配置则回退 default 平台
 func getOutputFilterForPlatform(cfg *config.Config, platform string) config.OutputFilterConfig {
-	p := strings.ToLower(strings.TrimSpace(platform))
-	if p == "" {
-		p = "default"
+	if cfg == nil {
+		return config.OutputFilterConfig{}
 	}
-	dd, ok := cfg.Collector.DeviceDefaults[p]
-	if !ok {
-		if strings.HasPrefix(p, "huawei") {
-			dd, ok = cfg.Collector.DeviceDefaults["huawei"]
-		}
-		if !ok && strings.HasPrefix(p, "h3c") {
-			dd, ok = cfg.Collector.DeviceDefaults["h3c"]
-		}
-		if !ok && strings.HasPrefix(p, "cisco") {
-			dd, ok = cfg.Collector.DeviceDefaults["cisco_ios"]
-		}
-		if !ok && strings.HasPrefix(p, "linux") {
-			dd, ok = cfg.Collector.DeviceDefaults["linux"]
-		}
-	}
-	if ok {
+	if dd, _, ok := cfg.GetDeviceDefaults(platform); ok {
 		if len(dd.OutputFilter.Prefixes) > 0 || len(dd.OutputFilter.Contains) > 0 {
 			return dd.OutputFilter
 		}
 	}
-	// 平台未命中时回退 default 平台
-	if def, ok := cfg.Collector.DeviceDefaults["default"]; ok {
-		return def.OutputFilter
-	}
-	// 无任何平台配置时回退为空过滤器（不改变输出）
-	return config.OutputFilterConfig{}
+	return cfg.Collector.OutputFilter
 }
 
 // applyPlatformLineFilter 根据设备平台选择过滤规则并应用
@@ -1031,22 +1024,8 @@ func (s *BackupService) isPreCommand(platform, cmd string) bool {
 	}
 	p := strings.ToLower(strings.TrimSpace(platform))
 
-	dd, ok := s.config.Collector.DeviceDefaults[p]
-	if !ok {
-		if strings.HasPrefix(p, "huawei") {
-			dd, ok = s.config.Collector.DeviceDefaults["huawei"]
-		}
-		if !ok && strings.HasPrefix(p, "h3c") {
-			dd, ok = s.config.Collector.DeviceDefaults["h3c"]
-		}
-		if !ok && strings.HasPrefix(p, "cisco") {
-			dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
-		}
-		if !ok && strings.HasPrefix(p, "linux") {
-			dd, ok = s.config.Collector.DeviceDefaults["linux"]
-		}
-	}
-	if ok {
+	if s != nil && s.config != nil {
+		dd, _, ok := s.config.GetDeviceDefaults(p)
 		// 提权命令
 		ecmd := strings.TrimSpace(dd.EnableCLI)
 		if ecmd == "" && dd.EnableRequired {
@@ -1061,6 +1040,7 @@ func (s *BackupService) isPreCommand(platform, cmd string) bool {
 				return true
 			}
 		}
+		_ = ok
 	}
 	// 通用兜底
 	if c == "enable" || c == "terminal length 0" || c == "screen-length disable" {

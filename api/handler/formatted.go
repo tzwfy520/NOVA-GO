@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/service"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 )
@@ -16,6 +18,35 @@ type FormattedHandler struct {
 // NewFormattedHandler 创建格式化处理器
 func NewFormattedHandler(formatService *service.FormatService) *FormattedHandler {
 	return &FormattedHandler{formatService: formatService}
+}
+
+func (h *FormattedHandler) handleFormatted(
+	c *gin.Context,
+	bind func() error,
+	exec func(ctx context.Context) (any, error),
+	invalidLogMsg string,
+	execFailLogMsg string,
+	execFailMsg string,
+) {
+	if err := bind(); err != nil {
+		logger.Error(invalidLogMsg, "error", err)
+		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "请求参数无效: " + err.Error()})
+		return
+	}
+
+	if h.formatService == nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Code: "SERVICE_NOT_READY", Message: "格式化服务未初始化"})
+		return
+	}
+
+	resp, err := exec(c.Request.Context())
+	if err != nil {
+		logger.Error(execFailLogMsg, "error", err)
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Code: "EXEC_FAILED", Message: execFailMsg + ": " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // BatchFormatted 批量格式化接口
@@ -31,25 +62,14 @@ func NewFormattedHandler(formatService *service.FormatService) *FormattedHandler
 // @Router /api/v1/formatted/batch [post]
 func (h *FormattedHandler) BatchFormatted(c *gin.Context) {
 	var req service.FormatBatchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		logger.Error("Invalid formatted batch request", "error", err)
-		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "请求参数无效: " + err.Error()})
-		return
-	}
-
-	if h.formatService == nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Code: "SERVICE_NOT_READY", Message: "格式化服务未初始化"})
-		return
-	}
-
-	resp, err := h.formatService.ExecuteBatch(c.Request.Context(), &req)
-	if err != nil {
-		logger.Error("Formatted batch execution failed", "error", err)
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Code: "EXEC_FAILED", Message: "批量格式化执行失败: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, resp)
+	h.handleFormatted(
+		c,
+		func() error { return c.ShouldBindJSON(&req) },
+		func(ctx context.Context) (any, error) { return h.formatService.ExecuteBatch(ctx, &req) },
+		"Invalid formatted batch request",
+		"Formatted batch execution failed",
+		"批量格式化执行失败",
+	)
 }
 
 // FastFormatted 单设备快速格式化接口
@@ -65,23 +85,12 @@ func (h *FormattedHandler) BatchFormatted(c *gin.Context) {
 // @Router /api/v1/formatted/fast [post]
 func (h *FormattedHandler) FastFormatted(c *gin.Context) {
 	var req service.FormatFastRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		logger.Error("Invalid formatted fast request", "error", err)
-		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "INVALID_PARAMS", Message: "请求参数无效: " + err.Error()})
-		return
-	}
-
-	if h.formatService == nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Code: "SERVICE_NOT_READY", Message: "格式化服务未初始化"})
-		return
-	}
-
-	resp, err := h.formatService.ExecuteFast(c.Request.Context(), &req)
-	if err != nil {
-		logger.Error("Formatted fast execution failed", "error", err)
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Code: "EXEC_FAILED", Message: "快速格式化执行失败: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, resp)
+	h.handleFormatted(
+		c,
+		func() error { return c.ShouldBindJSON(&req) },
+		func(ctx context.Context) (any, error) { return h.formatService.ExecuteFast(ctx, &req) },
+		"Invalid formatted fast request",
+		"Formatted fast execution failed",
+		"快速格式化执行失败",
+	)
 }

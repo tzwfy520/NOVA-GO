@@ -15,6 +15,7 @@ import (
 
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
@@ -86,24 +87,24 @@ type DeviceTemplateNotFound struct {
 }
 
 type FormatBatchResponse struct {
-    Code    string `json:"code"`
-    Message string `json:"message"`
-    // 前缀到设备名上一层：/{minio_prefix}/{save_dir}/{task_id}/formatted/
-    JSONPrefix      string                   `json:"json_prefix"`
-    DateTime        string                   `json:"date_time"` // YYYYMMDD_HHMMSS
-    LoginFailures   []DeviceFailure          `json:"login_failures"`
-    CollectFailures []DeviceCommandFailures  `json:"collect_failures"`
-    FormatFailures  []DeviceCommandFailures  `json:"failed_commands"`
-    FSMNotFound     []DeviceTemplateNotFound `json:"fsm_notfound"`
-    Stats           struct {
-        TotalDevices  int `json:"total_devices"`
-        FullySuccess  int `json:"fully_success_devices"`
-        LoginFailed   int `json:"login_failed_devices"`
-        CollectFailed int `json:"collect_failed_devices"`
-        ParseFailed   int `json:"parse_failed_devices"`
-    } `json:"stats"`
-    Stored []StoredObject `json:"stored_objects,omitempty"`
-    LogFilePath string `json:"log_file_path,omitempty"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	// 前缀到设备名上一层：/{minio_prefix}/{save_dir}/{task_id}/formatted/
+	JSONPrefix      string                   `json:"json_prefix"`
+	DateTime        string                   `json:"date_time"` // YYYYMMDD_HHMMSS
+	LoginFailures   []DeviceFailure          `json:"login_failures"`
+	CollectFailures []DeviceCommandFailures  `json:"collect_failures"`
+	FormatFailures  []DeviceCommandFailures  `json:"failed_commands"`
+	FSMNotFound     []DeviceTemplateNotFound `json:"fsm_notfound"`
+	Stats           struct {
+		TotalDevices  int `json:"total_devices"`
+		FullySuccess  int `json:"fully_success_devices"`
+		LoginFailed   int `json:"login_failed_devices"`
+		CollectFailed int `json:"collect_failed_devices"`
+		ParseFailed   int `json:"parse_failed_devices"`
+	} `json:"stats"`
+	Stored      []StoredObject `json:"stored_objects,omitempty"`
+	LogFilePath string         `json:"log_file_path,omitempty"`
 }
 
 // ====== 快速格式化请求/响应 ======
@@ -137,19 +138,19 @@ type FormatFastDevice struct {
 // FormatFastResponse 快速格式化响应
 // result: success | collect_failed | formatted_failed
 type FormatFastResponse struct {
-    Code     string `json:"code"`
-    Message  string `json:"message"`
-    TaskID   string `json:"task_id"`
-    DateTime string `json:"date_time"`
-    Result   string `json:"result"`
-    Device   struct {
-        DeviceIP       string `json:"device_ip"`
-        DeviceName     string `json:"device_name"`
-        DevicePlatform string `json:"device_platform"`
-    } `json:"device"`
-    Raw       []CommandResultView    `json:"raw"`
-    Formatted map[string]interface{} `json:"formatted_json"`
-    LogFilePath string `json:"log_file_path,omitempty"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	TaskID   string `json:"task_id"`
+	DateTime string `json:"date_time"`
+	Result   string `json:"result"`
+	Device   struct {
+		DeviceIP       string `json:"device_ip"`
+		DeviceName     string `json:"device_name"`
+		DevicePlatform string `json:"device_platform"`
+	} `json:"device"`
+	Raw         []CommandResultView    `json:"raw"`
+	Formatted   map[string]interface{} `json:"formatted_json"`
+	LogFilePath string                 `json:"log_file_path,omitempty"`
 }
 
 // ====== 服务定义 ======
@@ -169,7 +170,7 @@ type FormatService struct {
 	mutex       sync.RWMutex
 }
 
-func NewFormatService(cfg *config.Config) *FormatService {
+func newServicePool(cfg *config.Config) (*ssh.Pool, int) {
 	conc := cfg.Collector.Concurrent
 	if conc <= 0 {
 		conc = 1
@@ -179,9 +180,9 @@ func NewFormatService(cfg *config.Config) *FormatService {
 		threads = cfg.SSH.MaxSessions
 	}
 	poolConfig := &ssh.PoolConfig{
-		MaxIdle:     10,
-		MaxActive:   conc,
-		IdleTimeout: 5 * time.Minute,
+		MaxIdle:         10,
+		MaxActive:       conc,
+		IdleTimeout:     5 * time.Minute,
 		CleanupInterval: cfg.SSH.CleanupInterval,
 		SSHConfig: &ssh.Config{
 			Timeout:        cfg.SSH.Timeout,
@@ -190,8 +191,11 @@ func NewFormatService(cfg *config.Config) *FormatService {
 			MaxSessions:    threads,
 		},
 	}
+	return ssh.NewPool(poolConfig), conc
+}
 
-	pool := ssh.NewPool(poolConfig)
+func NewFormatService(cfg *config.Config) *FormatService {
+	pool, conc := newServicePool(cfg)
 	return &FormatService{
 		cfg:         cfg,
 		sshPool:     pool,
@@ -284,7 +288,6 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 	muAgg := &sync.Mutex{}
 
 	for _, dev := range req.Devices {
-		dev := dev // capture
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -309,18 +312,18 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 			var err error
 			for try := 0; try < attempts; try++ {
 				res, err = s.interact.Execute(ctx, &ExecRequest{
-					DeviceIP:        dev.DeviceIP,
-					Port:            dev.DevicePort,
-					DeviceName:      dev.DeviceName,
-					DevicePlatform:  dev.DevicePlatform,
-					CollectProtocol: dev.CollectProtocol,
-					UserName:        dev.UserName,
-					Password:        dev.Password,
-					EnablePassword:  dev.EnablePassword,
+					DeviceIP:         dev.DeviceIP,
+					Port:             dev.DevicePort,
+					DeviceName:       dev.DeviceName,
+					DevicePlatform:   dev.DevicePlatform,
+					CollectProtocol:  dev.CollectProtocol,
+					UserName:         dev.UserName,
+					Password:         dev.Password,
+					EnablePassword:   dev.EnablePassword,
 					TaskTimeoutSec:   timeout,
 					DeviceTimeoutSec: devTimeout,
-					TaskID:          req.TaskID,
-					LogType:         "format",
+					TaskID:           req.TaskID,
+					LogType:          "format",
 				}, dev.CliList)
 				if err == nil {
 					break
@@ -463,19 +466,19 @@ func (s *FormatService) ExecuteBatch(ctx context.Context, req *FormatBatchReques
 	}
 
 	// 统计与响应
-resp := &FormatBatchResponse{
-    Code:            "SUCCESS",
-    Message:         "批量格式化处理完成",
-    JSONPrefix:      s.buildJSONPrefix(req.SaveDir, req.TaskID),
-    DateTime:        dateTime,
-    LoginFailures:   loginFailures,
-    CollectFailures: collectFailures,
-    FormatFailures:  formatFailures,
-    Stored:          stored,
-}
-if s != nil && s.cfg != nil {
-    resp.LogFilePath = strings.TrimSpace(s.cfg.Log.FilePath)
-}
+	resp := &FormatBatchResponse{
+		Code:            "SUCCESS",
+		Message:         "批量格式化处理完成",
+		JSONPrefix:      s.buildJSONPrefix(req.SaveDir, req.TaskID),
+		DateTime:        dateTime,
+		LoginFailures:   loginFailures,
+		CollectFailures: collectFailures,
+		FormatFailures:  formatFailures,
+		Stored:          stored,
+	}
+	if s != nil && s.cfg != nil {
+		resp.LogFilePath = strings.TrimSpace(s.cfg.Log.FilePath)
+	}
 	resp.Stats.TotalDevices = len(req.Devices)
 	resp.Stats.LoginFailed = len(loginFailures)
 	resp.Stats.CollectFailed = uniqueDeviceCount(collectFailures)
@@ -552,28 +555,28 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 	var err error
 	for try := 0; try < attempts; try++ {
 		res, err = s.interact.Execute(ctx, &ExecRequest{
-			DeviceIP:        dev.DeviceIP,
-			Port:            dev.DevicePort,
-			DeviceName:      dev.DeviceName,
-			DevicePlatform:  dev.DevicePlatform,
-			CollectProtocol: dev.CollectProtocol,
-			UserName:        dev.UserName,
-			Password:        dev.Password,
-			EnablePassword:  dev.EnablePassword,
+			DeviceIP:         dev.DeviceIP,
+			Port:             dev.DevicePort,
+			DeviceName:       dev.DeviceName,
+			DevicePlatform:   dev.DevicePlatform,
+			CollectProtocol:  dev.CollectProtocol,
+			UserName:         dev.UserName,
+			Password:         dev.Password,
+			EnablePassword:   dev.EnablePassword,
 			TaskTimeoutSec:   timeout,
 			DeviceTimeoutSec: devTimeout,
-			TaskID:          req.TaskID,
-			LogType:         "format",
+			TaskID:           req.TaskID,
+			LogType:          "format",
 		}, userCmds)
 		if err == nil {
 			break
 		}
 		if try+1 >= attempts {
 			// 采集失败：返回 collect_failed
-    resp := &FormatFastResponse{Code: "SUCCESS", Message: "快速格式化处理完成", TaskID: req.TaskID, DateTime: dateTime, Result: "collect_failed"}
-    if s != nil && s.cfg != nil {
-        resp.LogFilePath = strings.TrimSpace(s.cfg.Log.FilePath)
-    }
+			resp := &FormatFastResponse{Code: "SUCCESS", Message: "快速格式化处理完成", TaskID: req.TaskID, DateTime: dateTime, Result: "collect_failed"}
+			if s != nil && s.cfg != nil {
+				resp.LogFilePath = strings.TrimSpace(s.cfg.Log.FilePath)
+			}
 			resp.Device.DeviceIP = dev.DeviceIP
 			resp.Device.DeviceName = dev.DeviceName
 			resp.Device.DevicePlatform = dev.DevicePlatform
@@ -614,10 +617,10 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 
 	// 采集结果为空
 	if len(rawViews) == 0 || nonEmptyRaw == 0 {
-    resp := &FormatFastResponse{Code: "SUCCESS", Message: "快速格式化处理完成", TaskID: req.TaskID, DateTime: dateTime, Result: "collect_failed"}
-    if s != nil && s.cfg != nil {
-        resp.LogFilePath = strings.TrimSpace(s.cfg.Log.FilePath)
-    }
+		resp := &FormatFastResponse{Code: "SUCCESS", Message: "快速格式化处理完成", TaskID: req.TaskID, DateTime: dateTime, Result: "collect_failed"}
+		if s != nil && s.cfg != nil {
+			resp.LogFilePath = strings.TrimSpace(s.cfg.Log.FilePath)
+		}
 		resp.Device.DeviceIP = dev.DeviceIP
 		resp.Device.DeviceName = dev.DeviceName
 		resp.Device.DevicePlatform = dev.DevicePlatform
@@ -664,10 +667,10 @@ func (s *FormatService) ExecuteFast(ctx context.Context, req *FormatFastRequest)
 		result = "formatted_failed"
 	}
 
-    resp := &FormatFastResponse{Code: "SUCCESS", Message: "快速格式化处理完成", TaskID: req.TaskID, DateTime: dateTime, Result: result}
-    if s != nil && s.cfg != nil {
-        resp.LogFilePath = strings.TrimSpace(s.cfg.Log.FilePath)
-    }
+	resp := &FormatFastResponse{Code: "SUCCESS", Message: "快速格式化处理完成", TaskID: req.TaskID, DateTime: dateTime, Result: result}
+	if s != nil && s.cfg != nil {
+		resp.LogFilePath = strings.TrimSpace(s.cfg.Log.FilePath)
+	}
 	resp.Device.DeviceIP = dev.DeviceIP
 	resp.Device.DeviceName = dev.DeviceName
 	resp.Device.DevicePlatform = dev.DevicePlatform
@@ -1320,33 +1323,7 @@ func (w *FormatMinioWriter) fastCheck(parent context.Context) error {
 }
 
 func (w *FormatMinioWriter) ensureBucket(parent context.Context, bucket string, retries int) error {
-	var lastErr error
-	for i := 0; i <= retries; i++ {
-		ctx, cancel := w.attemptContext(parent, 10*time.Second)
-		exists, err := w.client.BucketExists(ctx, bucket)
-		cancel()
-		if err != nil {
-			lastErr = err
-			time.Sleep(time.Duration(i+1) * time.Second)
-			continue
-		}
-		if exists {
-			return nil
-		}
-		ctx2, cancel2 := w.attemptContext(parent, 10*time.Second)
-		if mkErr := w.client.MakeBucket(ctx2, bucket, minio.MakeBucketOptions{}); mkErr != nil {
-			lastErr = mkErr
-			cancel2()
-			time.Sleep(time.Duration(i+1) * time.Second)
-			continue
-		}
-		cancel2()
-		return nil
-	}
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("bucket ensure failed for %s", bucket)
+	return ensureMinioBucket(parent, w.client, bucket, retries, w.attemptContext)
 }
 
 func (w *FormatMinioWriter) attemptContext(parent context.Context, prefer time.Duration) (context.Context, context.CancelFunc) {

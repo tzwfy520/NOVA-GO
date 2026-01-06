@@ -40,13 +40,13 @@ func autoIsPortOpen(host string, port int) bool {
 }
 
 // autoWaitForPortReady polls until the port is ready or timeout
-func autoWaitForPortReady(host string, port int, timeoutSec int) error {
+func autoWaitForPortReady(port int, timeoutSec int) error {
 	if timeoutSec <= 0 {
 		timeoutSec = 10
 	}
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	for time.Now().Before(deadline) {
-		if autoIsPortOpen(host, port) {
+		if autoIsPortOpen("", port) {
 			return nil
 		}
 		time.Sleep(300 * time.Millisecond)
@@ -55,13 +55,13 @@ func autoWaitForPortReady(host string, port int, timeoutSec int) error {
 }
 
 // autoWaitForPortClosed polls until the port is closed or timeout
-func autoWaitForPortClosed(host string, port int, timeoutSec int) error {
+func autoWaitForPortClosed(port int, timeoutSec int) error {
 	if timeoutSec <= 0 {
 		timeoutSec = 10
 	}
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	for time.Now().Before(deadline) {
-		if !autoIsPortOpen(host, port) {
+		if !autoIsPortOpen("", port) {
 			return nil
 		}
 		time.Sleep(300 * time.Millisecond)
@@ -70,15 +70,15 @@ func autoWaitForPortClosed(host string, port int, timeoutSec int) error {
 }
 
 // autoKillListeningOnPort kills process(es) listening on TCP port using lsof (macOS)
-func autoKillListeningOnPort(port int) ([]int, error) {
+func autoKillListeningOnPort(port int) []int {
 	if port <= 0 {
-		return nil, nil
+		return nil
 	}
 	cmd := exec.Command("lsof", "-nP", fmt.Sprintf("-iTCP:%d", port), "-sTCP:LISTEN", "-t")
 	out, err := cmd.Output()
 	if err != nil {
 		// lsof not available or no listeners
-		return nil, nil
+		return nil
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	pids := make([]int, 0, len(lines))
@@ -98,7 +98,7 @@ func autoKillListeningOnPort(port int) ([]int, error) {
 		time.Sleep(300 * time.Millisecond)
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
-	return pids, nil
+	return pids
 }
 
 // autoStartServer starts the main server via `go run`
@@ -197,13 +197,13 @@ func main() {
 	// 2) 启动前统一清理端口并等待关闭
 	for _, p := range cleanPorts {
 		fmt.Printf("[AUTO] 清理占用端口: %d\n", p)
-		pids, _ := autoKillListeningOnPort(p)
+		pids := autoKillListeningOnPort(p)
 		if len(pids) > 0 {
 			fmt.Printf("[AUTO] 已清理进程: %v\n", pids)
 		} else {
 			fmt.Printf("[AUTO] 未找到占用进程或 lsof 不可用 (port %d)\n", p)
 		}
-		_ = autoWaitForPortClosed(host, p, *startTimeout)
+		_ = autoWaitForPortClosed(p, *startTimeout)
 	}
 
 	// 3) 尝试启动应用
@@ -213,7 +213,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[AUTO] 启动失败: %v\n", err)
 	}
 	if err == nil {
-		if e := autoWaitForPortReady(host, serverPort, *startTimeout); e == nil {
+		if e := autoWaitForPortReady(serverPort, *startTimeout); e == nil {
 			alive := false
 			if srvCmd != nil && srvCmd.Process != nil {
 				if errAlive := srvCmd.Process.Signal(syscall.Signal(0)); errAlive == nil {
@@ -226,7 +226,7 @@ func main() {
 				if len(simulatePorts) > 0 {
 					ready := make([]string, 0, len(simulatePorts))
 					for _, sp := range uniquePorts(simulatePorts) {
-						_ = autoWaitForPortReady(host, sp, *startTimeout)
+						_ = autoWaitForPortReady(sp, *startTimeout)
 						if autoIsPortOpen(host, sp) {
 							ready = append(ready, fmt.Sprintf("%s:%d", host, sp))
 						}
@@ -248,8 +248,8 @@ func main() {
 	// 4) 启动失败兜底：再次清理 server 端口并重试
 	if autoIsPortOpen(host, serverPort) {
 		fmt.Printf("[AUTO] 首次启动失败，清理端口(%d)后重试...\n", serverPort)
-		_, _ = autoKillListeningOnPort(serverPort)
-		_ = autoWaitForPortClosed(host, serverPort, *startTimeout)
+		_ = autoKillListeningOnPort(serverPort)
+		_ = autoWaitForPortClosed(serverPort, *startTimeout)
 	}
 
 	fmt.Printf("[AUTO] 重试启动应用: go run %s\n", *serverMain)
@@ -258,7 +258,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[AUTO] 重试启动失败: %v\n", err)
 		os.Exit(1)
 	}
-	if e := autoWaitForPortReady(host, serverPort, *startTimeout); e != nil {
+	if e := autoWaitForPortReady(serverPort, *startTimeout); e != nil {
 		fmt.Fprintf(os.Stderr, "[AUTO] 重试后端口仍未就绪: %v\n", e)
 		if srvCmd2 != nil && srvCmd2.Process != nil {
 			_ = srvCmd2.Process.Kill()
@@ -270,7 +270,7 @@ func main() {
 	if len(simulatePorts) > 0 {
 		ready := make([]string, 0, len(simulatePorts))
 		for _, sp := range uniquePorts(simulatePorts) {
-			_ = autoWaitForPortReady(host, sp, *startTimeout)
+			_ = autoWaitForPortReady(sp, *startTimeout)
 			if autoIsPortOpen(host, sp) {
 				ready = append(ready, fmt.Sprintf("%s:%d", host, sp))
 			}

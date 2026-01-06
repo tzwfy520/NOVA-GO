@@ -7,16 +7,17 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
-	"regexp"
-	"sort"
 
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/ssh"
@@ -299,12 +300,15 @@ func (s *namespaceServer) start() error {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				if ne, ok := err.(net.Error); ok && ne.Temporary() {
-					logger.Warn("Simulate: accept temporary error", "error", err)
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					logger.Warn("Simulate: accept timeout", "error", err)
 					time.Sleep(200 * time.Millisecond)
 					continue
 				}
-				// listener closed
+				logger.Warn("Simulate: accept error", "error", err)
 				return
 			}
 			logger.Debug("Simulate: accept connection", "namespace", s.nsName, "remote", conn.RemoteAddr().String())
@@ -378,11 +382,27 @@ func (s *namespaceServer) handleConn(nc net.Conn) {
 	// 完成握手
 	conn, chans, reqs, err := ssh.NewServerConn(nc, srvCfg)
 	if err != nil {
-		logger.Error("Simulate: SSH handshake failed", "namespace", s.nsName, "remote", nc.RemoteAddr().String(), "error", err)
+		// 握手失败（常见于端口扫描或健康检查直接关闭连接）
+		if err != io.EOF {
+			logger.Errorf("Simulate: SSH handshake failed namespace=%s remote=%s error=%v", s.nsName, nc.RemoteAddr().String(), err)
+		} else {
+			// EOF 通常是健康检查/扫描，降级为 Debug 避免刷屏
+			logger.Debugf("Simulate: SSH handshake failed (EOF) namespace=%s remote=%s", s.nsName, nc.RemoteAddr().String())
+		}
 		_ = nc.Close()
 		return
 	}
-	logger.Debug("Simulate: handshake success", "namespace", s.nsName, "user", conn.User(), "remote", nc.RemoteAddr().String(), "client", string(conn.ClientVersion()))
+	logger.Debug(
+		"Simulate: handshake success",
+		"namespace",
+		s.nsName,
+		"user",
+		conn.User(),
+		"remote",
+		nc.RemoteAddr().String(),
+		"client",
+		string(conn.ClientVersion()),
+	)
 	defer conn.Close()
 
 	// 丢弃全局请求
@@ -392,7 +412,7 @@ func (s *namespaceServer) handleConn(nc net.Conn) {
 	for ch := range chans {
 		logger.Debug("Simulate: channel type", "type", ch.ChannelType())
 		if ch.ChannelType() != "session" {
-			ch.Reject(ssh.UnknownChannelType, "unknown channel type")
+			_ = ch.Reject(ssh.UnknownChannelType, "unknown channel type")
 			continue
 		}
 		channel, requests, err := ch.Accept()
@@ -409,7 +429,17 @@ func (s *namespaceServer) handleConn(nc net.Conn) {
 		enableRequired := devType.EnableModeRequired
 		enableSuffix := devType.EnableModeSuffix
 
-		logger.Debug("Simulate: device resolved", "device", deviceName, "prompt_suffix", promptSuffix, "enable_required", enableRequired, "enable_suffix", enableSuffix)
+		logger.Debug(
+			"Simulate: device resolved",
+			"device",
+			deviceName,
+			"prompt_suffix",
+			promptSuffix,
+			"enable_required",
+			enableRequired,
+			"enable_suffix",
+			enableSuffix,
+		)
 		// 处理请求（pty-req / shell / exec）
 		go s.handleSession(channel, requests, deviceName, promptSuffix, enableRequired, enableSuffix)
 	}
@@ -426,7 +456,14 @@ func (s *namespaceServer) resolveDeviceType(deviceName string) DeviceTypeConfig 
 	return DeviceTypeConfig{PromptSuffix: ">", EnableModeRequired: false, EnableModeSuffix: "#"}
 }
 
-func (s *namespaceServer) handleSession(channel ssh.Channel, requests <-chan *ssh.Request, deviceName, promptSuffix string, enableRequired bool, enableSuffix string) {
+func (s *namespaceServer) handleSession(
+	channel ssh.Channel,
+	requests <-chan *ssh.Request,
+	deviceName string,
+	promptSuffix string,
+	enableRequired bool,
+	enableSuffix string,
+) {
 	defer channel.Close()
 
 	// 跟踪 PTY 是否已就绪
@@ -437,10 +474,10 @@ func (s *namespaceServer) handleSession(channel ssh.Channel, requests <-chan *ss
 		switch req.Type {
 		case "pty-req":
 			ptyReady = true
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 			logger.Debug("Simulate: pty-req ok", "device", deviceName)
 		case "shell":
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 			logger.Debug("Simulate: shell start", "device", deviceName)
 			// 进入交互式 shell
 			s.runInteractiveShell(channel, deviceName, promptSuffix, enableRequired, enableSuffix)
@@ -456,14 +493,14 @@ func (s *namespaceServer) handleSession(channel ssh.Channel, requests <-chan *ss
 				logger.Debug("Simulate: exec unmatched", "cmd", cmd)
 				out = "unspport command\r\n"
 			}
-			channel.Write([]byte(out))
+			_, _ = channel.Write([]byte(out))
 			if ptyReady {
-				channel.Write([]byte(fmt.Sprintf("%s%s\r\n", deviceName, promptSuffix)))
+				_, _ = channel.Write([]byte(fmt.Sprintf("%s%s\r\n", deviceName, promptSuffix)))
 			}
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 			return
 		default:
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 			logger.Debug("Simulate: unknown request", "type", req.Type)
 		}
 	}
@@ -473,7 +510,7 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 	// 初始提示符
 	currentSuffix := promptSuffix
 	printPrompt := func() {
-		channel.Write([]byte(fmt.Sprintf("%s%s\r\n", deviceName, currentSuffix)))
+		_, _ = channel.Write([]byte(fmt.Sprintf("%s%s\r\n", deviceName, currentSuffix)))
 	}
 	printPrompt()
 	logger.Debug("Simulate: prompt printed", "device", deviceName, "suffix", currentSuffix)
@@ -492,7 +529,7 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 		if idleTimer != nil {
 			select {
 			case <-idleTimer.C:
-				channel.Write([]byte("\r\nSession closed due to idle timeout.\r\n"))
+				_, _ = channel.Write([]byte("\r\nSession closed due to idle timeout.\r\n"))
 				logger.Debug("Simulate: session idle timeout", "device", deviceName)
 				return
 			default:
@@ -523,7 +560,7 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 		logger.Debug("Simulate: input", "device", deviceName, "cmd", cmd)
 		if cmd == "" {
 			// 1) 无命令输入，显示新的一行
-			channel.Write([]byte("\r\n"))
+			_, _ = channel.Write([]byte("\r\n"))
 			printPrompt()
 			continue
 		}
@@ -536,7 +573,7 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 
 		// 处理退出
 		if equalAny(cmd, "exit", "quit") {
-			channel.Write([]byte("\r\n"))
+			_, _ = channel.Write([]byte("\r\n"))
 			logger.Debug("Simulate: session exit", "device", deviceName)
 			return
 		}
@@ -544,10 +581,10 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 		// 处理 enable：统一要求提权密码为 nova
 		if enableRequired && strings.EqualFold(cmd, "enable") {
 			logger.Debug("Simulate: enable requested", "device", deviceName)
-			channel.Write([]byte("Password:\r\n"))
+			_, _ = channel.Write([]byte("Password:\r\n"))
 			pwd, _ := reader.ReadString('\n')
 			if strings.TrimSpace(cleanNewlines(pwd)) != "nova" {
-				channel.Write([]byte("Bad secrets\r\n"))
+				_, _ = channel.Write([]byte("Bad secrets\r\n"))
 				logger.Debug("Simulate: enable failed", "device", deviceName)
 				printPrompt()
 				continue
@@ -566,7 +603,7 @@ func (s *namespaceServer) runInteractiveShell(channel ssh.Channel, deviceName, p
 			out = "unspport command\r\n"
 		}
 		// 2) 匹配：显示 txt 文件内容（已按 CRLF 标准化）
-		channel.Write([]byte(out))
+		_, _ = channel.Write([]byte(out))
 		printPrompt()
 	}
 }
@@ -575,8 +612,24 @@ func (s *namespaceServer) loadCommandOutput(ns, deviceName, cmd string) string {
 	// 新增：优先从 SQLite 按 namespace + device_name + command 精确匹配
 	if db := database.GetDB(); db != nil {
 		var rec model.SimDeviceCommand
-		if err := db.Where("namespace = ? AND device_name = ? AND command = ? AND enabled = 1", ns, deviceName, cmd).First(&rec).Error; err == nil {
-			logger.Debug("Simulate: load out (sqlite)", "ns", ns, "device", deviceName, "cmd", cmd, "id", rec.ID)
+		err := db.Where(
+			"namespace = ? AND device_name = ? AND command = ? AND enabled = 1",
+			ns,
+			deviceName,
+			cmd,
+		).First(&rec).Error
+		if err == nil {
+			logger.Debug(
+				"Simulate: load out (sqlite)",
+				"ns",
+				ns,
+				"device",
+				deviceName,
+				"cmd",
+				cmd,
+				"id",
+				rec.ID,
+			)
 			return ensureCRLF(rec.Output)
 		}
 	}
@@ -600,15 +653,28 @@ func (s *namespaceServer) loadCommandOutput(ns, deviceName, cmd string) string {
 	dbOut := make(map[string]string, 64)
 	if db := database.GetDB(); db != nil {
 		var rows []model.SimDeviceCommand
-		if err := db.Where("namespace = ? AND device_name = ? AND enabled = 1", ns, deviceName).Find(&rows).Error; err == nil {
+		err := db.Where(
+			"namespace = ? AND device_name = ? AND enabled = 1",
+			ns,
+			deviceName,
+		).Find(&rows).Error
+		if err == nil {
 			for _, r := range rows {
 				canon := strings.TrimSpace(strings.ReplaceAll(r.Command, "_", " "))
-				if canon == "" { continue }
+				if canon == "" {
+					continue
+				}
 				dbOut[canon] = r.Output
-				// 若不在候选中则追加
 				exists := false
-				for _, c := range cands { if strings.EqualFold(c, canon) { exists = true; break } }
-				if !exists { cands = append(cands, canon) }
+				for _, c := range cands {
+					if strings.EqualFold(c, canon) {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					cands = append(cands, canon)
+				}
 			}
 		}
 	}
@@ -647,9 +713,13 @@ func (s *namespaceServer) loadCommandOutput(ns, deviceName, cmd string) string {
 		}
 		// 回退：按候选名尝试 direct/normalized
 		p3 := filepath.Join(base, fmt.Sprintf("%s.txt", chosen))
-		if bs, err := os.ReadFile(p3); err == nil { return ensureCRLF(string(bs)) }
+		if bs, err := os.ReadFile(p3); err == nil {
+			return ensureCRLF(string(bs))
+		}
 		p4 := filepath.Join(base, fmt.Sprintf("%s.txt", strings.ReplaceAll(chosen, " ", "_")))
-		if bs, err := os.ReadFile(p4); err == nil { return ensureCRLF(string(bs)) }
+		if bs, err := os.ReadFile(p4); err == nil {
+			return ensureCRLF(string(bs))
+		}
 		return "unspport command\r\n"
 	}
 	// 多个匹配：输出建议列表
@@ -670,10 +740,16 @@ func (s *namespaceServer) listSupportedCommands(base string) ([]string, map[stri
 	// 扫描目录中的 .txt 文件
 	if entries, err := os.ReadDir(base); err == nil {
 		for _, e := range entries {
-			if e.IsDir() { continue }
+			if e.IsDir() {
+				continue
+			}
 			name := e.Name()
-			if !strings.HasSuffix(strings.ToLower(name), ".txt") { continue }
-			if strings.EqualFold(name, "supported_commands.txt") { continue }
+			if !strings.HasSuffix(strings.ToLower(name), ".txt") {
+				continue
+			}
+			if strings.EqualFold(name, "supported_commands.txt") {
+				continue
+			}
 			stem := strings.TrimSuffix(name, ".txt")
 			canon := strings.ReplaceAll(stem, "_", " ")
 			fileMap[canon] = filepath.Join(base, name)
@@ -685,32 +761,44 @@ func (s *namespaceServer) listSupportedCommands(base string) ([]string, map[stri
 	if bs, err := os.ReadFile(listPath); err == nil {
 		for _, ln := range strings.Split(string(bs), "\n") {
 			ln = strings.TrimSpace(strings.TrimRight(strings.ReplaceAll(ln, "\r", ""), "\n"))
-			if ln == "" || strings.HasPrefix(ln, "#") { continue }
+			if ln == "" || strings.HasPrefix(ln, "#") {
+				continue
+			}
 			// 若已存在于扫描结果则跳过；否则添加候选并尝试推导文件名映射
 			exists := false
-			for _, c := range cands { if strings.EqualFold(c, ln) { exists = true; break } }
+			for _, c := range cands {
+				if strings.EqualFold(c, ln) {
+					exists = true
+					break
+				}
+			}
 			if !exists {
 				cands = append(cands, ln)
 				// 推导规范文件路径（可能不存在，加载时再兜底）
 				norm := strings.ReplaceAll(ln, " ", "_")
 				fp := filepath.Join(base, fmt.Sprintf("%s.txt", norm))
-				if _, err := os.Stat(fp); err == nil { fileMap[ln] = fp }
+				if _, err := os.Stat(fp); err == nil {
+					fileMap[ln] = fp
+				}
 			}
 		}
 	}
 	return cands, fileMap
 }
 
-
 // 新增：按词前缀的正则匹配（大小写不敏感；从命令首词开始顺序匹配）
 func prefixWordMatchCommands(input string, cands []string) []string {
 	in := strings.TrimSpace(strings.ReplaceAll(input, "_", " "))
-	if in == "" { return nil }
+	if in == "" {
+		return nil
+	}
 	parts := strings.Fields(strings.ToLower(in))
 	res := make([]string, 0, len(cands))
 	for _, c := range cands {
 		cparts := strings.Fields(strings.ToLower(strings.ReplaceAll(c, "_", " ")))
-		if len(parts) > len(cparts) { continue }
+		if len(parts) > len(cparts) {
+			continue
+		}
 		ok := true
 		for i := range parts {
 			esc := regexp.QuoteMeta(parts[i])
@@ -721,7 +809,9 @@ func prefixWordMatchCommands(input string, cands []string) []string {
 				break
 			}
 		}
-		if ok { res = append(res, c) }
+		if ok {
+			res = append(res, c)
+		}
 	}
 	return res
 }
@@ -730,13 +820,20 @@ func prefixWordMatchCommands(input string, cands []string) []string {
 func extractCommandFromPayload(payload string) string {
 	// 更稳健的清洗：移除所有不可见ASCII控制字符（0x00-0x1F, 0x7F），保留空格
 	// 并将多重空白压缩为单空格，去除包裹引号
-	if payload == "" { return "" }
+	if payload == "" {
+		return ""
+	}
 	var sb strings.Builder
 	for _, r := range payload {
 		// 统一将制表/换行/回车等转为空格，用于后续压缩
-		if r == '\t' || r == '\n' || r == '\r' { sb.WriteRune(' '); continue }
+		if r == '\t' || r == '\n' || r == '\r' {
+			sb.WriteRune(' ')
+			continue
+		}
 		// 过滤控制字符
-		if r < 32 || r == 127 { continue }
+		if r < 32 || r == 127 {
+			continue
+		}
 		sb.WriteRune(r)
 	}
 	s := strings.TrimSpace(sb.String())

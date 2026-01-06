@@ -4,12 +4,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var log *logrus.Logger
+var mu sync.RWMutex
 
 // Config 日志配置
 type Config struct {
@@ -25,7 +27,12 @@ type Config struct {
 
 // Init 初始化日志
 func Init(config Config) error {
-	log = logrus.New()
+	mu.Lock()
+	defer mu.Unlock()
+
+	if log == nil {
+		log = logrus.New()
+	}
 
 	// 设置日志级别
 	level, err := logrus.ParseLevel(config.Level)
@@ -79,14 +86,50 @@ func Init(config Config) error {
 
 // GetLogger 获取日志实例
 func GetLogger() *logrus.Logger {
+	mu.RLock()
+	l := log
+	mu.RUnlock()
+	if l != nil {
+		return l
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
 	if log == nil {
 		log = logrus.New()
 	}
 	return log
 }
 
+func asFields(args []interface{}) (string, logrus.Fields, bool) {
+	if len(args) < 3 {
+		return "", nil, false
+	}
+	msg, ok := args[0].(string)
+	if !ok || msg == "" {
+		return "", nil, false
+	}
+	rest := args[1:]
+	if len(rest)%2 != 0 {
+		return "", nil, false
+	}
+	fields := logrus.Fields{}
+	for i := 0; i < len(rest); i += 2 {
+		k, ok := rest[i].(string)
+		if !ok || k == "" {
+			return "", nil, false
+		}
+		fields[k] = rest[i+1]
+	}
+	return msg, fields, true
+}
+
 // Debug 调试日志
 func Debug(args ...interface{}) {
+	if msg, fields, ok := asFields(args); ok {
+		GetLogger().WithFields(fields).Debug(msg)
+		return
+	}
 	GetLogger().Debug(args...)
 }
 
@@ -97,6 +140,10 @@ func Debugf(format string, args ...interface{}) {
 
 // Info 信息日志
 func Info(args ...interface{}) {
+	if msg, fields, ok := asFields(args); ok {
+		GetLogger().WithFields(fields).Info(msg)
+		return
+	}
 	GetLogger().Info(args...)
 }
 
@@ -107,6 +154,10 @@ func Infof(format string, args ...interface{}) {
 
 // Warn 警告日志
 func Warn(args ...interface{}) {
+	if msg, fields, ok := asFields(args); ok {
+		GetLogger().WithFields(fields).Warn(msg)
+		return
+	}
 	GetLogger().Warn(args...)
 }
 
@@ -117,6 +168,10 @@ func Warnf(format string, args ...interface{}) {
 
 // Error 错误日志
 func Error(args ...interface{}) {
+	if msg, fields, ok := asFields(args); ok {
+		GetLogger().WithFields(fields).Error(msg)
+		return
+	}
 	GetLogger().Error(args...)
 }
 
@@ -127,6 +182,10 @@ func Errorf(format string, args ...interface{}) {
 
 // Fatal 致命错误日志
 func Fatal(args ...interface{}) {
+	if msg, fields, ok := asFields(args); ok {
+		GetLogger().WithFields(fields).Fatal(msg)
+		return
+	}
 	GetLogger().Fatal(args...)
 }
 

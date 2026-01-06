@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 )

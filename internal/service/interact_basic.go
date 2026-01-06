@@ -1,33 +1,33 @@
 package service
 
 import (
-    "context"
-    "errors"
-    "fmt"
-    "net"
-    "strings"
-    "time"
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
+	"time"
 
-    "github.com/sshcollectorpro/sshcollectorpro/internal/config"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
 )
 
 // ExecRequest 执行器输入参数（设备连接信息）
 type ExecRequest struct {
-    DeviceIP        string
-    Port            int
-    DeviceName      string
-    DevicePlatform  string
-    CollectProtocol string // ssh
-    UserName        string
-    Password        string
-    EnablePassword  string
-    TaskTimeoutSec   int
-    DeviceTimeoutSec int
-    TaskID          string
-    // 新增：用于分类日志的类型标识（collector|backup|format|deploy 等）
-    LogType        string
+	DeviceIP         string
+	Port             int
+	DeviceName       string
+	DevicePlatform   string
+	CollectProtocol  string // ssh
+	UserName         string
+	Password         string
+	EnablePassword   string
+	TaskTimeoutSec   int
+	DeviceTimeoutSec int
+	TaskID           string
+	// 新增：用于分类日志的类型标识（collector|backup|format|deploy 等）
+	LogType string
 }
 
 // InteractBasic 统一的设备基础交互入口：
@@ -41,6 +41,44 @@ type InteractBasic struct {
 
 func NewInteractBasic(cfg *config.Config, pool *ssh.Pool) *InteractBasic {
 	return &InteractBasic{cfg: cfg, pool: pool}
+}
+
+func (b *InteractBasic) logTaskTraceCommands(req *ExecRequest, results []*ssh.CommandResult) {
+	if req == nil {
+		return
+	}
+	dname := strings.TrimSpace(req.DeviceName)
+	if dname == "" {
+		dname = strings.TrimSpace(req.DeviceIP)
+	}
+	if dname == "" {
+		dname = unknownValue
+	}
+	logType := strings.TrimSpace(req.LogType)
+	taskID := strings.TrimSpace(req.TaskID)
+	for _, nr := range results {
+		if nr == nil {
+			continue
+		}
+		execOK := nr.ExitCode == 0 && strings.TrimSpace(nr.Error) == ""
+		execResult := "失败"
+		if execOK {
+			execResult = "成功"
+		}
+		cmdName := strings.TrimSpace(nr.Command)
+		if cmdName == "" {
+			cmdName = unknownValue
+		}
+		logger.WithFields(map[string]interface{}{
+			"log_type":    logType,
+			"task_id":     taskID,
+			"device":      dname,
+			"command":     cmdName,
+			"status":      execResult,
+			"exit_code":   nr.ExitCode,
+			"duration_ms": nr.Duration.Milliseconds(),
+		}).Info(fmt.Sprintf("task_trace: device %s 执行 %s", dname, cmdName))
+	}
 }
 
 // Execute 执行用户命令：
@@ -83,7 +121,7 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 		devTO = effTaskTimeout
 	}
 
-	var loginCtx context.Context = execCtx
+	loginCtx := execCtx
 	var cancelLogin context.CancelFunc
 	// 若设备连接超时短于任务超时，则创建更短的登录上下文
 	if time.Duration(devTO)*time.Second < time.Duration(effTaskTimeout)*time.Second {
@@ -99,39 +137,52 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 		}
 	}
 
-    client, err := b.pool.GetConnection(loginCtx, conn)
-    if err != nil {
-        // 任务追逐日志：设备登陆阶段与状态
-        dname := strings.TrimSpace(func() string {
-            if strings.TrimSpace(req.DeviceName) != "" { return req.DeviceName }
-            if strings.TrimSpace(req.DeviceIP) != "" { return req.DeviceIP }
-            return "<unknown>"
-        }())
-        logger.WithFields(map[string]interface{}{
-            "log_type": strings.TrimSpace(req.LogType),
-            "task_id":  strings.TrimSpace(req.TaskID),
-            "device":   dname,
-        }).Info(fmt.Sprintf("task_trace: device %s 登陆 失败", dname))
-        // 设备登陆阶段的超时错误，统一标注为“设备登陆失败”
-        if isLoginTimeout(err) {
-            return nil, fmt.Errorf("设备登陆失败")
-        }
-        return nil, fmt.Errorf("failed to create SSH connection: %w", err)
-    }
-    // 任务追逐日志：设备登陆成功
-    {
-        dname := strings.TrimSpace(func() string {
-            if strings.TrimSpace(req.DeviceName) != "" { return req.DeviceName }
-            if strings.TrimSpace(req.DeviceIP) != "" { return req.DeviceIP }
-            return "<unknown>"
-        }())
-        logger.WithFields(map[string]interface{}{
-            "log_type": strings.TrimSpace(req.LogType),
-            "task_id":  strings.TrimSpace(req.TaskID),
-            "device":   dname,
-        }).Info(fmt.Sprintf("task_trace: device %s 登陆 成功", dname))
-    }
-    defer b.pool.ReleaseConnection(conn)
+	client, isTemp, err := b.pool.GetConnection(loginCtx, conn)
+	if err != nil {
+		// 任务追逐日志：设备登陆阶段与状态
+		dname := strings.TrimSpace(func() string {
+			if strings.TrimSpace(req.DeviceName) != "" {
+				return req.DeviceName
+			}
+			if strings.TrimSpace(req.DeviceIP) != "" {
+				return req.DeviceIP
+			}
+			return unknownValue
+		}())
+		logger.WithFields(map[string]interface{}{
+			"log_type": strings.TrimSpace(req.LogType),
+			"task_id":  strings.TrimSpace(req.TaskID),
+			"device":   dname,
+			"error":    err.Error(),
+			"timeout":  devTO,
+		}).Info(fmt.Sprintf("task_trace: device %s 登陆 失败", dname))
+		if isLoginTimeout(err) {
+			return nil, fmt.Errorf("设备登陆超时(%ds): %w", devTO, err)
+		}
+		return nil, fmt.Errorf("failed to create SSH connection: %w", err)
+	}
+	// 任务追逐日志：设备登陆成功
+	{
+		dname := strings.TrimSpace(func() string {
+			if strings.TrimSpace(req.DeviceName) != "" {
+				return req.DeviceName
+			}
+			if strings.TrimSpace(req.DeviceIP) != "" {
+				return req.DeviceIP
+			}
+			return unknownValue
+		}())
+		logger.WithFields(map[string]interface{}{
+			"log_type": strings.TrimSpace(req.LogType),
+			"task_id":  strings.TrimSpace(req.TaskID),
+			"device":   dname,
+		}).Info(fmt.Sprintf("task_trace: device %s 登陆 成功", dname))
+	}
+	if isTemp {
+		defer client.Close()
+	} else {
+		defer b.pool.ReleaseConnection(conn)
+	}
 
 	// 注入平台级预命令（enable 与分页关闭）
 	commands := make([]string, 0, len(userCommands)+4)
@@ -144,36 +195,45 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 	}
 
 	// 交互默认与提示符后缀
-	defaults := getPlatformDefaults(strings.ToLower(strings.TrimSpace(func() string {
-		if req.DevicePlatform == "" {
-			return "default"
-		}
-		return req.DevicePlatform
-	}())))
+	defaults := getPlatformDefaults(req.DevicePlatform)
 	promptSuffixes := defaults.PromptSuffixes
 	if len(promptSuffixes) == 0 {
 		promptSuffixes = []string{"#", ">", "]"}
 	}
 
 	// 构造交互选项，包括 enable 流程与自动交互
-    interactive := &ssh.InteractiveOptions{SkipDelayedEcho: defaults.SkipDelayedEcho}
-    // 新增：用于精确提示符判定
-    interactive.DeviceName = strings.TrimSpace(req.DeviceName)
-    // 新增：设备平台用于区分不同平台的处理逻辑
-    interactive.DevicePlatform = strings.TrimSpace(req.DevicePlatform)
-    interactive.PromptSuffixes = promptSuffixes
-    if len(defaults.LongOutputCommands) > 0 {
-        interactive.LongOutputCommands = defaults.LongOutputCommands
-    }
+	interactive := &ssh.InteractiveOptions{SkipDelayedEcho: defaults.SkipDelayedEcho}
+	// 新增：用于精确提示符判定
+	interactive.DeviceName = strings.TrimSpace(req.DeviceName)
+	// 新增：设备平台用于区分不同平台的处理逻辑
+	interactive.DevicePlatform = strings.TrimSpace(req.DevicePlatform)
+	interactive.PromptSuffixes = promptSuffixes
+	if len(defaults.LongOutputCommands) > 0 {
+		interactive.LongOutputCommands = defaults.LongOutputCommands
+	}
 	// enable 配置
 	p := strings.ToLower(strings.TrimSpace(req.DevicePlatform))
-	if dd, ok := b.cfg.Collector.DeviceDefaults[p]; ok && dd.EnableRequired {
-		interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
-		interactive.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
-		if strings.TrimSpace(req.EnablePassword) != "" {
-			interactive.EnablePassword = strings.TrimSpace(req.EnablePassword)
-		} else if strings.TrimSpace(req.Password) != "" {
-			interactive.EnablePassword = strings.TrimSpace(req.Password)
+	if b.cfg != nil {
+		if dd, _, ok := b.cfg.GetDeviceDefaults(req.DevicePlatform); ok && dd.EnableRequired {
+			interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
+			interactive.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
+			if strings.TrimSpace(req.EnablePassword) != "" {
+				interactive.EnablePassword = strings.TrimSpace(req.EnablePassword)
+			} else if strings.TrimSpace(req.Password) != "" {
+				interactive.EnablePassword = strings.TrimSpace(req.Password)
+			}
+		} else if strings.HasPrefix(p, "cisco") {
+			if strings.TrimSpace(req.EnablePassword) != "" {
+				interactive.EnablePassword = strings.TrimSpace(req.EnablePassword)
+			} else if strings.TrimSpace(req.Password) != "" {
+				interactive.EnablePassword = strings.TrimSpace(req.Password)
+			}
+			if strings.TrimSpace(interactive.EnableCLI) == "" {
+				interactive.EnableCLI = "enable"
+			}
+			if strings.TrimSpace(interactive.EnableExpectOutput) == "" {
+				interactive.EnableExpectOutput = "Password"
+			}
 		}
 	} else if strings.HasPrefix(p, "cisco") {
 		// 兼容 Cisco 默认行为
@@ -227,101 +287,71 @@ func (b *InteractBasic) Execute(ctx context.Context, req *ExecRequest, userComma
 		}
 		interactive.AutoInteractions = mapped
 	}
-	// 不再叠加全局交互；交互配置由平台/device_defaults.interact 提供
 
 	// 交互优先执行
 	res, err := client.ExecuteInteractiveCommands(execCtx, commands, promptSuffixes, interactive)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(execCtx.Err(), context.DeadlineExceeded) {
+			filtered := filterInternalPreCommands(pre, userCommands, res)
+			out := make([]*ssh.CommandResult, 0, len(filtered))
+			for _, r := range filtered {
+				if r == nil {
+					continue
+				}
+				nr := *r
+				nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
+				out = append(out, &nr)
+			}
+			return out, fmt.Errorf("设备交互超时(%ds): %w", effTaskTimeout, err)
+		}
 		// 回退前重置连接，避免复用异常会话
-		_ = b.pool.CloseConnection(conn)
+		if !isTemp {
+			_ = b.pool.CloseConnection(conn)
+		}
 		// 重连使用与登录相同的限时窗口
-		client2, errConn := b.pool.GetConnection(loginCtx, conn)
+		client2, isTemp2, errConn := b.pool.GetConnection(loginCtx, conn)
 		if errConn != nil {
 			// 若重连失败，保留原始错误以便定位
 			return nil, fmt.Errorf("interactive failed: %v; fallback reconnect failed: %w", err, errConn)
 		}
-		defer b.pool.ReleaseConnection(conn)
+		if isTemp2 {
+			defer client2.Close()
+		} else {
+			defer b.pool.ReleaseConnection(conn)
+		}
 		// 回退非交互（保证尽力而为）
 		res2, err2 := client2.ExecuteCommands(execCtx, commands)
 		if err2 != nil {
 			return nil, fmt.Errorf("interactive failed: %v; non-interactive failed: %w", err, err2)
 		}
-        // 回退结果继续走统一过滤流程
-        filtered := filterInternalPreCommandsBase(b.cfg, req.DevicePlatform, userCommands, res2)
-        out := make([]*ssh.CommandResult, 0, len(filtered))
-        for _, r := range filtered {
-            if r == nil {
-                continue
-            }
-            nr := *r
-            nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
-            out = append(out, &nr)
-        }
-        // 任务追逐日志：命令执行阶段与状态（回退非交互路径）
-        {
-            dname := strings.TrimSpace(func() string {
-                if strings.TrimSpace(req.DeviceName) != "" { return req.DeviceName }
-                if strings.TrimSpace(req.DeviceIP) != "" { return req.DeviceIP }
-                return "<unknown>"
-            }())
-            for _, nr := range out {
-                if nr == nil { continue }
-                execOK := nr.ExitCode == 0 && strings.TrimSpace(nr.Error) == ""
-                execResult := "失败"
-                if execOK { execResult = "成功" }
-                cmdName := strings.TrimSpace(nr.Command)
-                if cmdName == "" { cmdName = "<unknown>" }
-                logger.WithFields(map[string]interface{}{
-                    "log_type": strings.TrimSpace(req.LogType),
-                    "task_id": strings.TrimSpace(req.TaskID),
-                    "device": dname,
-                    "command": cmdName,
-                    "status": execResult,
-                    "exit_code": nr.ExitCode,
-                    "duration_ms": nr.Duration.Milliseconds(),
-                }).Info(fmt.Sprintf("task_trace: device %s 执行 %s", dname, cmdName))
-            }
-        }
-        return out, nil
-    }
+		// 回退结果继续走统一过滤流程
+		filtered := filterInternalPreCommands(pre, userCommands, res2)
+		out := make([]*ssh.CommandResult, 0, len(filtered))
+		for _, r := range filtered {
+			if r == nil {
+				continue
+			}
+			nr := *r
+			nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
+			out = append(out, &nr)
+		}
+		b.logTaskTraceCommands(req, out)
+		return out, nil
+	}
 
 	// 正常交互结果：统一过滤与输出处理
-	filtered := filterInternalPreCommandsBase(b.cfg, req.DevicePlatform, userCommands, res)
-    out := make([]*ssh.CommandResult, 0, len(filtered))
-    for _, r := range filtered {
-        if r == nil {
-            continue
-        }
-        nr := *r
-        nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
-        out = append(out, &nr)
-    }
-    // 任务追逐日志：命令执行阶段与状态（交互路径）
-    {
-        dname := strings.TrimSpace(func() string {
-            if strings.TrimSpace(req.DeviceName) != "" { return req.DeviceName }
-            if strings.TrimSpace(req.DeviceIP) != "" { return req.DeviceIP }
-            return "<unknown>"
-        }())
-        for _, nr := range out {
-            if nr == nil { continue }
-            execOK := nr.ExitCode == 0 && strings.TrimSpace(nr.Error) == ""
-            execResult := "失败"
-            if execOK { execResult = "成功" }
-            cmdName := strings.TrimSpace(nr.Command)
-            if cmdName == "" { cmdName = "<unknown>" }
-            logger.WithFields(map[string]interface{}{
-                "log_type": strings.TrimSpace(req.LogType),
-                "task_id": strings.TrimSpace(req.TaskID),
-                "device": dname,
-                "command": cmdName,
-                "status": execResult,
-                "exit_code": nr.ExitCode,
-                "duration_ms": nr.Duration.Milliseconds(),
-            }).Info(fmt.Sprintf("task_trace: device %s 执行 %s", dname, cmdName))
-        }
-    }
-    return out, nil
+	filtered := filterInternalPreCommands(pre, userCommands, res)
+	out := make([]*ssh.CommandResult, 0, len(filtered))
+	for _, r := range filtered {
+		if r == nil {
+			continue
+		}
+		nr := *r
+		nr.Output = applyPlatformLineFilter(b.cfg, req.DevicePlatform, r.Output)
+		out = append(out, &nr)
+	}
+	b.logTaskTraceCommands(req, out)
+	return out, nil
 }
 
 // isLoginTimeout 判断连接/握手阶段是否为典型超时错误
@@ -346,62 +376,43 @@ func isLoginTimeout(err error) bool {
 	return false
 }
 
-// filterInternalPreCommandsBase 基于配置过滤预命令结果（enable 与关闭分页），保留用户命令对应输出
-func filterInternalPreCommandsBase(cfg *config.Config, platform string, userCmds []string, results []*ssh.CommandResult) []*ssh.CommandResult {
+func filterInternalPreCommands(injectedPreCmds []string, userCmds []string, results []*ssh.CommandResult) []*ssh.CommandResult {
 	out := make([]*ssh.CommandResult, 0, len(results))
-	p := strings.ToLower(strings.TrimSpace(platform))
-	dd, ok := cfg.Collector.DeviceDefaults[p]
-	if !ok {
-		if strings.HasPrefix(p, "huawei") {
-			dd, ok = cfg.Collector.DeviceDefaults["huawei"]
-		}
-		if !ok && strings.HasPrefix(p, "h3c") {
-			dd, ok = cfg.Collector.DeviceDefaults["h3c"]
-		}
-		if !ok && strings.HasPrefix(p, "cisco") {
-			dd, ok = cfg.Collector.DeviceDefaults["cisco_ios"]
-		}
-		if !ok && strings.HasPrefix(p, "linux") {
-			dd = cfg.Collector.DeviceDefaults["linux"]
+
+	pre := map[string]struct{}{}
+	for _, c := range injectedPreCmds {
+		k := strings.ToLower(strings.TrimSpace(c))
+		if k != "" {
+			pre[k] = struct{}{}
 		}
 	}
-	// 用户命令集合用于硬过滤未知命令
-	uidx := map[string]struct{}{}
-	for _, u := range userCmds {
-		uidx[strings.ToLower(strings.TrimSpace(u))] = struct{}{}
+
+	user := map[string]struct{}{}
+	for _, c := range userCmds {
+		k := strings.ToLower(strings.TrimSpace(c))
+		if k != "" {
+			user[k] = struct{}{}
+		}
 	}
-	enableCmd := strings.TrimSpace(dd.EnableCLI)
-	if enableCmd == "" {
-		enableCmd = "enable"
-	}
+
 	for _, r := range results {
 		if r == nil {
 			continue
 		}
 		cmd := strings.ToLower(strings.TrimSpace(r.Command))
-		// 跳过 enable 与关闭分页预命令
-		if cmd == strings.ToLower(enableCmd) {
-			continue
-		}
-		skip := false
-		for _, pc := range dd.DisablePagingCmds {
-			if strings.ToLower(strings.TrimSpace(pc)) == cmd {
-				skip = true
-				break
+		if cmd != "" {
+			if _, ok := pre[cmd]; ok {
+				continue
 			}
-		}
-		if skip {
-			continue
-		}
-		// 若命令不在用户列表，尽量跳过（避免误入内部命令）
-		if _, ok := uidx[cmd]; !ok {
+			if len(user) > 0 {
+				if _, ok := user[cmd]; !ok {
+					continue
+				}
+			}
+		} else if len(user) > 0 {
 			continue
 		}
 		out = append(out, r)
-	}
-	// 若过滤后为空，则回退原结果（尽量保留）
-	if len(out) == 0 {
-		return results
 	}
 	return out
 }
@@ -413,21 +424,10 @@ func (b *InteractBasic) getPreCommands(platform string, user []string) []string 
 	if p == "" {
 		return out
 	}
-	dd, ok := b.cfg.Collector.DeviceDefaults[p]
-	if !ok {
-		if strings.HasPrefix(p, "huawei") {
-			dd, ok = b.cfg.Collector.DeviceDefaults["huawei"]
-		}
-		if !ok && strings.HasPrefix(p, "h3c") {
-			dd, ok = b.cfg.Collector.DeviceDefaults["h3c"]
-		}
-		if !ok && strings.HasPrefix(p, "cisco") {
-			dd, ok = b.cfg.Collector.DeviceDefaults["cisco_ios"]
-		}
-		if !ok && strings.HasPrefix(p, "linux") {
-			dd, ok = b.cfg.Collector.DeviceDefaults["linux"]
-		}
+	if b == nil || b.cfg == nil {
+		return out
 	}
+	dd, _, ok := b.cfg.GetDeviceDefaults(platform)
 	has := func(cmd string) bool {
 		key := strings.ToLower(strings.TrimSpace(cmd))
 		for _, c := range user {
@@ -459,156 +459,181 @@ func (b *InteractBasic) getPreCommands(platform string, user []string) []string 
 
 // EnterConfigMode 统一进入配置模式：读取平台 config_mode_clis 并执行
 func (b *InteractBasic) EnterConfigMode(ctx context.Context, req *ExecRequest) ([]*ssh.CommandResult, error) {
-    if b == nil || b.cfg == nil || b.pool == nil { return nil, fmt.Errorf("InteractBasic not initialized") }
-    p := strings.ToLower(strings.TrimSpace(func() string { if req.DevicePlatform == "" { return "default" }; return req.DevicePlatform }()))
-    dd, ok := b.cfg.Collector.DeviceDefaults[p]
-    if !ok {
-        found := false
-        if strings.HasPrefix(p, "huawei") {
-            if v, ok2 := b.cfg.Collector.DeviceDefaults["huawei"]; ok2 { dd = v; found = true }
-        }
-        if !found && strings.HasPrefix(p, "h3c") {
-            if v, ok2 := b.cfg.Collector.DeviceDefaults["h3c"]; ok2 { dd = v; found = true }
-        }
-        if !found && strings.HasPrefix(p, "cisco") {
-            if v, ok2 := b.cfg.Collector.DeviceDefaults["cisco_ios"]; ok2 { dd = v; found = true }
-        }
-        if !found && strings.HasPrefix(p, "linux") {
-            if v, ok2 := b.cfg.Collector.DeviceDefaults["linux"]; ok2 { dd = v; found = true }
-        }
-    }
-    cmds := make([]string, 0, len(dd.ConfigModeCLIs))
-    for _, c := range dd.ConfigModeCLIs { t := strings.TrimSpace(c); if t != "" { cmds = append(cmds, t) } }
-    if len(cmds) == 0 { return nil, nil }
+	if b == nil || b.cfg == nil || b.pool == nil {
+		return nil, fmt.Errorf("InteractBasic not initialized")
+	}
+	p := strings.ToLower(strings.TrimSpace(func() string {
+		if req.DevicePlatform == "" {
+			return "default"
+		}
+		return req.DevicePlatform
+	}()))
+	dd, _, _ := b.cfg.GetDeviceDefaults(p)
+	cmds := make([]string, 0, len(dd.ConfigModeCLIs))
+	for _, c := range dd.ConfigModeCLIs {
+		t := strings.TrimSpace(c)
+		if t != "" {
+			cmds = append(cmds, t)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil, nil
+	}
 
-    // 连接复用与上下文
-    effTaskTimeout := req.TaskTimeoutSec; if effTaskTimeout <= 0 { effTaskTimeout = 30 }
-    execCtx, cancelExec := context.WithTimeout(ctx, time.Duration(effTaskTimeout)*time.Second); defer cancelExec()
-    devTO := req.DeviceTimeoutSec; if devTO <= 0 { devTO = effTaskTimeout }
-    var loginCtx context.Context = execCtx; var cancelLogin context.CancelFunc
-    if time.Duration(devTO)*time.Second < time.Duration(effTaskTimeout)*time.Second {
-        loginCtx, cancelLogin = context.WithTimeout(ctx, time.Duration(devTO)*time.Second); defer cancelLogin()
-    } else {
-        if deadline, ok := ctx.Deadline(); ok { remain := time.Until(deadline); if remain > 0 && remain < time.Duration(effTaskTimeout)*time.Second { loginCtx = ctx } }
-    }
-    conn := &ssh.ConnectionInfo{ Host: req.DeviceIP, Port: func() int { if req.Port < 1 || req.Port > 65535 { return 22 }; return req.Port }(), Username: req.UserName, Password: req.Password }
-    client, err := b.pool.GetConnection(loginCtx, conn)
-    if err != nil {
-        // 任务追逐日志：设备登陆阶段与状态
-        dname := strings.TrimSpace(func() string {
-            if strings.TrimSpace(req.DeviceName) != "" { return req.DeviceName }
-            if strings.TrimSpace(req.DeviceIP) != "" { return req.DeviceIP }
-            return "<unknown>"
-        }())
-        logger.WithFields(map[string]interface{}{
-            "log_type": strings.TrimSpace(req.LogType),
-            "task_id": strings.TrimSpace(req.TaskID),
-            "device": dname,
-        }).Info(fmt.Sprintf("task_trace: device %s 登陆 失败", dname))
-        if isLoginTimeout(err) { return nil, fmt.Errorf("设备登陆失败") }
-        return nil, fmt.Errorf("failed to create SSH connection: %w", err)
-    }
-    // 任务追逐日志：设备登陆成功
-    {
-        dname := strings.TrimSpace(func() string {
-            if strings.TrimSpace(req.DeviceName) != "" { return req.DeviceName }
-            if strings.TrimSpace(req.DeviceIP) != "" { return req.DeviceIP }
-            return "<unknown>"
-        }())
-        logger.WithFields(map[string]interface{}{
-            "log_type": strings.TrimSpace(req.LogType),
-            "task_id": strings.TrimSpace(req.TaskID),
-            "device": dname,
-        }).Info(fmt.Sprintf("task_trace: device %s 登陆 成功", dname))
-    }
-    defer b.pool.ReleaseConnection(conn)
+	// 连接复用与上下文
+	effTaskTimeout := req.TaskTimeoutSec
+	if effTaskTimeout <= 0 {
+		effTaskTimeout = 30
+	}
+	execCtx, cancelExec := context.WithTimeout(ctx, time.Duration(effTaskTimeout)*time.Second)
+	defer cancelExec()
+	devTO := req.DeviceTimeoutSec
+	if devTO <= 0 {
+		devTO = effTaskTimeout
+	}
+	loginCtx := execCtx
+	var cancelLogin context.CancelFunc
+	if time.Duration(devTO)*time.Second < time.Duration(effTaskTimeout)*time.Second {
+		loginCtx, cancelLogin = context.WithTimeout(ctx, time.Duration(devTO)*time.Second)
+		defer cancelLogin()
+	} else {
+		if deadline, ok := ctx.Deadline(); ok {
+			remain := time.Until(deadline)
+			if remain > 0 && remain < time.Duration(effTaskTimeout)*time.Second {
+				loginCtx = ctx
+			}
+		}
+	}
+	conn := &ssh.ConnectionInfo{Host: req.DeviceIP, Port: func() int {
+		if req.Port < 1 || req.Port > 65535 {
+			return 22
+		}
+		return req.Port
+	}(), Username: req.UserName, Password: req.Password}
+	client, isTemp, err := b.pool.GetConnection(loginCtx, conn)
+	if err != nil {
+		// 任务追逐日志：设备登陆阶段与状态
+		dname := strings.TrimSpace(func() string {
+			if strings.TrimSpace(req.DeviceName) != "" {
+				return req.DeviceName
+			}
+			if strings.TrimSpace(req.DeviceIP) != "" {
+				return req.DeviceIP
+			}
+			return unknownValue
+		}())
+		logger.WithFields(map[string]interface{}{
+			"log_type": strings.TrimSpace(req.LogType),
+			"task_id":  strings.TrimSpace(req.TaskID),
+			"device":   dname,
+		}).Info(fmt.Sprintf("task_trace: device %s 登陆 失败", dname))
+		if isLoginTimeout(err) {
+			return nil, fmt.Errorf("设备登陆失败")
+		}
+		return nil, fmt.Errorf("failed to create SSH connection: %w", err)
+	}
+	// 任务追逐日志：设备登陆成功
+	{
+		dname := strings.TrimSpace(func() string {
+			if strings.TrimSpace(req.DeviceName) != "" {
+				return req.DeviceName
+			}
+			if strings.TrimSpace(req.DeviceIP) != "" {
+				return req.DeviceIP
+			}
+			return unknownValue
+		}())
+		logger.WithFields(map[string]interface{}{
+			"log_type": strings.TrimSpace(req.LogType),
+			"task_id":  strings.TrimSpace(req.TaskID),
+			"device":   dname,
+		}).Info(fmt.Sprintf("task_trace: device %s 登陆 成功", dname))
+	}
+	if isTemp {
+		defer client.Close()
+	} else {
+		defer b.pool.ReleaseConnection(conn)
+	}
 
-    // 平台交互参数（与 Execute 一致）
-    defaults := getPlatformDefaults(p)
-    promptSuffixes := defaults.PromptSuffixes; if len(promptSuffixes) == 0 { promptSuffixes = []string{"#", ">", "]"} }
-    interactive := &ssh.InteractiveOptions{ SkipDelayedEcho: defaults.SkipDelayedEcho }
-    // 新增：用于精确提示符判定
-    interactive.DeviceName = strings.TrimSpace(req.DeviceName)
-    // 新增：设备平台用于区分不同平台的处理逻辑
-    interactive.DevicePlatform = strings.TrimSpace(req.DevicePlatform)
-    interactive.PromptSuffixes = promptSuffixes
-    if dd.EnableRequired {
-        interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
-        interactive.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
-        if strings.TrimSpace(req.EnablePassword) != "" { interactive.EnablePassword = strings.TrimSpace(req.EnablePassword) } else if strings.TrimSpace(req.Password) != "" { interactive.EnablePassword = strings.TrimSpace(req.Password) }
-    }
-    if strings.TrimSpace(req.Password) != "" { interactive.LoginPassword = strings.TrimSpace(req.Password) }
-    if defaults.CommandIntervalMS > 0 { interactive.CommandIntervalMS = defaults.CommandIntervalMS }
-    if defaults.CommandTimeoutSec > 0 { interactive.PerCommandTimeoutSec = defaults.CommandTimeoutSec }
-    if defaults.QuietAfterMS > 0 { interactive.QuietAfterMS = defaults.QuietAfterMS }
-    if defaults.QuietPollIntervalMS > 0 { interactive.QuietPollIntervalMS = defaults.QuietPollIntervalMS }
-    if defaults.EnablePasswordFallbackMS > 0 { interactive.EnablePasswordFallbackMS = defaults.EnablePasswordFallbackMS }
-    if defaults.PromptInducerIntervalMS > 0 { interactive.PromptInducerIntervalMS = defaults.PromptInducerIntervalMS }
-    if defaults.PromptInducerMaxCount > 0 { interactive.PromptInducerMaxCount = defaults.PromptInducerMaxCount }
-    if defaults.ExitPauseMS > 0 { interactive.ExitPauseMS = defaults.ExitPauseMS }
-    // 退出命令序列（会话结束时使用）
-    if strings.HasPrefix(p, "cisco") { interactive.ExitCommands = []string{"exit"} } else if strings.HasPrefix(p, "h3c") || strings.HasPrefix(p, "huawei") { interactive.ExitCommands = []string{"quit", "exit"} } else { interactive.ExitCommands = []string{"exit", "quit"} }
+	// 平台交互参数（与 Execute 一致）
+	defaults := getPlatformDefaults(p)
+	promptSuffixes := defaults.PromptSuffixes
+	if len(promptSuffixes) == 0 {
+		promptSuffixes = []string{"#", ">", "]"}
+	}
+	interactive := &ssh.InteractiveOptions{SkipDelayedEcho: defaults.SkipDelayedEcho}
+	// 新增：用于精确提示符判定
+	interactive.DeviceName = strings.TrimSpace(req.DeviceName)
+	// 新增：设备平台用于区分不同平台的处理逻辑
+	interactive.DevicePlatform = strings.TrimSpace(req.DevicePlatform)
+	interactive.PromptSuffixes = promptSuffixes
+	if dd.EnableRequired {
+		interactive.EnableCLI = strings.TrimSpace(dd.EnableCLI)
+		interactive.EnableExpectOutput = strings.TrimSpace(dd.EnableExceptOutput)
+		if strings.TrimSpace(req.EnablePassword) != "" {
+			interactive.EnablePassword = strings.TrimSpace(req.EnablePassword)
+		} else if strings.TrimSpace(req.Password) != "" {
+			interactive.EnablePassword = strings.TrimSpace(req.Password)
+		}
+	}
+	if strings.TrimSpace(req.Password) != "" {
+		interactive.LoginPassword = strings.TrimSpace(req.Password)
+	}
+	if defaults.CommandIntervalMS > 0 {
+		interactive.CommandIntervalMS = defaults.CommandIntervalMS
+	}
+	if defaults.CommandTimeoutSec > 0 {
+		interactive.PerCommandTimeoutSec = defaults.CommandTimeoutSec
+	}
+	if defaults.QuietAfterMS > 0 {
+		interactive.QuietAfterMS = defaults.QuietAfterMS
+	}
+	if defaults.QuietPollIntervalMS > 0 {
+		interactive.QuietPollIntervalMS = defaults.QuietPollIntervalMS
+	}
+	if defaults.EnablePasswordFallbackMS > 0 {
+		interactive.EnablePasswordFallbackMS = defaults.EnablePasswordFallbackMS
+	}
+	if defaults.PromptInducerIntervalMS > 0 {
+		interactive.PromptInducerIntervalMS = defaults.PromptInducerIntervalMS
+	}
+	if defaults.PromptInducerMaxCount > 0 {
+		interactive.PromptInducerMaxCount = defaults.PromptInducerMaxCount
+	}
+	if defaults.ExitPauseMS > 0 {
+		interactive.ExitPauseMS = defaults.ExitPauseMS
+	}
+	// 退出命令序列（会话结束时使用）
+	if strings.HasPrefix(p, "cisco") {
+		interactive.ExitCommands = []string{"exit"}
+	} else if strings.HasPrefix(p, "h3c") || strings.HasPrefix(p, "huawei") {
+		interactive.ExitCommands = []string{"quit", "exit"}
+	} else {
+		interactive.ExitCommands = []string{"exit", "quit"}
+	}
 
-    // 交互执行进入配置模式命令，失败则回退到非交互执行
-    res, err := client.ExecuteInteractiveCommands(execCtx, cmds, promptSuffixes, interactive)
-    if err != nil {
-        _ = b.pool.CloseConnection(conn)
-        client2, errConn := b.pool.GetConnection(loginCtx, conn)
-        if errConn != nil { return nil, fmt.Errorf("interactive failed: %v; fallback reconnect failed: %w", err, errConn) }
-        defer b.pool.ReleaseConnection(conn)
-        res2, err2 := client2.ExecuteCommands(execCtx, cmds)
-        if err2 != nil { return nil, fmt.Errorf("interactive failed: %v; non-interactive failed: %w", err, err2) }
-        // 任务追逐日志：命令执行阶段与状态（回退非交互路径，进入配置模式）
-        {
-            dname := strings.TrimSpace(func() string {
-                if strings.TrimSpace(req.DeviceName) != "" { return req.DeviceName }
-                if strings.TrimSpace(req.DeviceIP) != "" { return req.DeviceIP }
-                return "<unknown>"
-            }())
-            for _, nr := range res2 {
-                if nr == nil { continue }
-                execOK := nr.ExitCode == 0 && strings.TrimSpace(nr.Error) == ""
-                execResult := "失败"
-                if execOK { execResult = "成功" }
-                cmdName := strings.TrimSpace(nr.Command)
-                if cmdName == "" { cmdName = "<unknown>" }
-                logger.WithFields(map[string]interface{}{
-                    "log_type": strings.TrimSpace(req.LogType),
-                    "task_id": strings.TrimSpace(req.TaskID),
-                    "device": dname,
-                    "command": cmdName,
-                    "status": execResult,
-                    "exit_code": nr.ExitCode,
-                    "duration_ms": nr.Duration.Milliseconds(),
-                }).Info(fmt.Sprintf("task_trace: device %s 执行 %s", dname, cmdName))
-            }
-        }
-        return res2, nil
-    }
-    // 任务追逐日志：命令执行阶段与状态（交互路径，进入配置模式）
-    {
-        dname := strings.TrimSpace(func() string {
-            if strings.TrimSpace(req.DeviceName) != "" { return req.DeviceName }
-            if strings.TrimSpace(req.DeviceIP) != "" { return req.DeviceIP }
-            return "<unknown>"
-        }())
-        for _, nr := range res {
-            if nr == nil { continue }
-            execOK := nr.ExitCode == 0 && strings.TrimSpace(nr.Error) == ""
-            execResult := "失败"
-            if execOK { execResult = "成功" }
-            cmdName := strings.TrimSpace(nr.Command)
-            if cmdName == "" { cmdName = "<unknown>" }
-            logger.WithFields(map[string]interface{}{
-                "log_type": strings.TrimSpace(req.LogType),
-                "task_id": strings.TrimSpace(req.TaskID),
-                "device": dname,
-                "command": cmdName,
-                "status": execResult,
-                "exit_code": nr.ExitCode,
-                "duration_ms": nr.Duration.Milliseconds(),
-            }).Info(fmt.Sprintf("task_trace: device %s 执行 %s", dname, cmdName))
-        }
-    }
-    return res, nil
+	// 交互执行进入配置模式命令，失败则回退到非交互执行
+	res, err := client.ExecuteInteractiveCommands(execCtx, cmds, promptSuffixes, interactive)
+	if err != nil {
+		if !isTemp {
+			_ = b.pool.CloseConnection(conn)
+		}
+		client2, isTemp2, errConn := b.pool.GetConnection(loginCtx, conn)
+		if errConn != nil {
+			return nil, fmt.Errorf("interactive failed: %v; fallback reconnect failed: %w", err, errConn)
+		}
+		if isTemp2 {
+			defer client2.Close()
+		} else {
+			defer b.pool.ReleaseConnection(conn)
+		}
+		res2, err2 := client2.ExecuteCommands(execCtx, cmds)
+		if err2 != nil {
+			return nil, fmt.Errorf("interactive failed: %v; non-interactive failed: %w", err, err2)
+		}
+		b.logTaskTraceCommands(req, res2)
+		return res2, nil
+	}
+	b.logTaskTraceCommands(req, res)
+	return res, nil
 }

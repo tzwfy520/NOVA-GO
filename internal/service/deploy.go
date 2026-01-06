@@ -104,27 +104,11 @@ func canonical(cmd string) string {
 
 // 读取平台默认配置（设备默认）
 func (s *DeployService) getDefaults(platform string) (config.PlatformDefaultsConfig, bool) {
-	p := strings.TrimSpace(strings.ToLower(platform))
-	if p == "" {
-		p = "default"
+	if s == nil || s.cfg == nil {
+		return config.PlatformDefaultsConfig{}, false
 	}
-	// 优先精确匹配
-	if s.cfg != nil && s.cfg.Collector.DeviceDefaults != nil {
-		if dd, ok := s.cfg.Collector.DeviceDefaults[p]; ok {
-			return dd, true
-		}
-		// 前缀兜底：当 key 为平台前缀时也可匹配（如 huawei、h3c、cisco_ios、linux）
-		for key, v := range s.cfg.Collector.DeviceDefaults {
-			kk := strings.TrimSpace(strings.ToLower(key))
-			if kk == "" {
-				continue
-			}
-			if strings.HasPrefix(p, kk) {
-				return v, true
-			}
-		}
-	}
-	return config.PlatformDefaultsConfig{}, false
+	dd, _, ok := s.cfg.GetDeviceDefaults(platform)
+	return dd, ok
 }
 
 // Deploy 执行下发
@@ -220,7 +204,7 @@ func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*De
 				Password: d.Password,
 			}
 			connCtx, cancel := context.WithTimeout(ctx, sshTimeout)
-			cli, err := s.sshPool.GetConnection(connCtx, info)
+			cli, isTemp, err := s.sshPool.GetConnection(connCtx, info)
 			cancel()
 			if err != nil {
 				r.Error = "connect failed: " + err.Error()
@@ -300,7 +284,11 @@ func (s *DeployService) Deploy(ctx context.Context, req *DeployFastRequest) (*De
 			// 执行详细日志（逐条）
 			sessionLogs := s.runCommandsDetailed(ctx, cli, deploySeq, p.PromptSuffixes, opts)
 			// 释放连接到全局池（每台设备完成后立即释放，避免 defer 堆积）
-			s.sshPool.ReleaseConnection(info)
+			if isTemp {
+				cli.Close()
+			} else {
+				s.sshPool.ReleaseConnection(info)
+			}
 
 			// 仅保留用户命令对应的回显作为 deploy_log_exec
 			include := map[string]struct{}{}
@@ -439,8 +427,60 @@ type platformInteract struct {
 }
 
 func (s *DeployService) getPlatformInteract(platform string) platformInteract {
-	dd, ok := s.getDefaults(platform)
 	p := platformInteract{}
+	if s != nil && s.cfg != nil {
+		it := s.cfg.SSH.Interact
+		if it.CommandIntervalMS > 0 {
+			p.CommandIntervalMS = it.CommandIntervalMS
+		}
+		if it.CommandTimeoutSec > 0 {
+			p.CommandTimeoutSec = it.CommandTimeoutSec
+		}
+		if it.QuietAfterMS > 0 {
+			p.QuietAfterMS = it.QuietAfterMS
+		}
+		if it.QuietPollIntervalMS > 0 {
+			p.QuietPollIntervalMS = it.QuietPollIntervalMS
+		}
+		if it.EnablePasswordFallbackMS > 0 {
+			p.EnablePasswordFallbackMS = it.EnablePasswordFallbackMS
+		}
+		if it.PromptInducerIntervalMS > 0 {
+			p.PromptInducerIntervalMS = it.PromptInducerIntervalMS
+		}
+		if it.PromptInducerMaxCount > 0 {
+			p.PromptInducerMaxCount = it.PromptInducerMaxCount
+		}
+		if it.ExitPauseMS > 0 {
+			p.ExitPauseMS = it.ExitPauseMS
+		}
+	}
+	if p.CommandIntervalMS <= 0 {
+		p.CommandIntervalMS = 120
+	}
+	if p.CommandTimeoutSec <= 0 {
+		p.CommandTimeoutSec = 30
+	}
+	if p.QuietAfterMS <= 0 {
+		p.QuietAfterMS = 800
+	}
+	if p.QuietPollIntervalMS <= 0 {
+		p.QuietPollIntervalMS = 250
+	}
+	if p.EnablePasswordFallbackMS <= 0 {
+		p.EnablePasswordFallbackMS = 1500
+	}
+	if p.PromptInducerIntervalMS <= 0 {
+		p.PromptInducerIntervalMS = 1000
+	}
+	if p.PromptInducerMaxCount <= 0 {
+		p.PromptInducerMaxCount = 12
+	}
+	if p.ExitPauseMS <= 0 {
+		p.ExitPauseMS = 150
+	}
+
+	dd, ok := s.getDefaults(platform)
 	if !ok {
 		return p
 	}
@@ -462,46 +502,30 @@ func (s *DeployService) getPlatformInteract(platform string) platformInteract {
 	p.EnableCLI = dd.EnableCLI
 	p.EnableExceptOutput = dd.EnableExceptOutput
 	p.ErrorHints = append([]string{}, dd.Interact.ErrorHints...)
-	// 交互节奏回退
+	// 平台交互节奏覆盖全局
 	if dd.Timeout.Interact.CommandIntervalMS > 0 {
 		p.CommandIntervalMS = dd.Timeout.Interact.CommandIntervalMS
-	} else {
-		p.CommandIntervalMS = 120
 	}
 	if dd.Timeout.Interact.CommandTimeoutSec > 0 {
 		p.CommandTimeoutSec = dd.Timeout.Interact.CommandTimeoutSec
-	} else {
-		p.CommandTimeoutSec = 30
 	}
 	if dd.Timeout.Interact.QuietAfterMS > 0 {
 		p.QuietAfterMS = dd.Timeout.Interact.QuietAfterMS
-	} else {
-		p.QuietAfterMS = 800
 	}
 	if dd.Timeout.Interact.QuietPollIntervalMS > 0 {
 		p.QuietPollIntervalMS = dd.Timeout.Interact.QuietPollIntervalMS
-	} else {
-		p.QuietPollIntervalMS = 250
 	}
 	if dd.Timeout.Interact.EnablePasswordFallbackMS > 0 {
 		p.EnablePasswordFallbackMS = dd.Timeout.Interact.EnablePasswordFallbackMS
-	} else {
-		p.EnablePasswordFallbackMS = 1500
 	}
 	if dd.Timeout.Interact.PromptInducerIntervalMS > 0 {
 		p.PromptInducerIntervalMS = dd.Timeout.Interact.PromptInducerIntervalMS
-	} else {
-		p.PromptInducerIntervalMS = 1000
 	}
 	if dd.Timeout.Interact.PromptInducerMaxCount > 0 {
 		p.PromptInducerMaxCount = dd.Timeout.Interact.PromptInducerMaxCount
-	} else {
-		p.PromptInducerMaxCount = 12
 	}
 	if dd.Timeout.Interact.ExitPauseMS > 0 {
 		p.ExitPauseMS = dd.Timeout.Interact.ExitPauseMS
-	} else {
-		p.ExitPauseMS = 150
 	}
 	return p
 }

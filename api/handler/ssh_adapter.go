@@ -11,11 +11,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
 	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-	"gopkg.in/yaml.v3"
-	"gorm.io/gorm"
 )
 
 // SSHAdapterHandler SSH适配处理器
@@ -57,7 +58,9 @@ func (h *SSHAdapterHandler) ListPlatforms(c *gin.Context) {
 	// 读取 configs/auto-ssh.yaml 的 collector.device_defaults，按平台补全缺失条目
 	// 数据源优先级：数据库 > auto-ssh.yaml（仅用于补全，不覆盖已存在条目）
 	present := map[string]struct{}{}
-	for _, p := range list { present[p.Type] = struct{}{} }
+	for _, p := range list {
+		present[p.Type] = struct{}{}
+	}
 	if entries, err := loadConfigDeviceDefaultsEntries(filepath.Join("configs", "auto-ssh.yaml")); err == nil {
 		for _, e := range entries {
 			if _, ok := present[e.Type]; ok {
@@ -66,9 +69,18 @@ func (h *SSHAdapterHandler) ListPlatforms(c *gin.Context) {
 					var p model.SSHPlatform
 					if err2 := db.Where("ssh_type = ?", e.Type).First(&p).Error; err2 == nil {
 						changed := false
-						if p.Vendor == "" && e.Vendor != "" { p.Vendor = e.Vendor; changed = true }
-						if p.System == "" && e.System != "" { p.System = e.System; changed = true }
-						if p.Remark == "" && e.Remark != "" { p.Remark = e.Remark; changed = true }
+						if p.Vendor == "" && e.Vendor != "" {
+							p.Vendor = e.Vendor
+							changed = true
+						}
+						if p.System == "" && e.System != "" {
+							p.System = e.System
+							changed = true
+						}
+						if p.Remark == "" && e.Remark != "" {
+							p.Remark = e.Remark
+							changed = true
+						}
 						if changed {
 							if err2 := database.WithRetry(func(d *gorm.DB) error { return d.Save(&p).Error }, 6, 100*time.Millisecond); err2 != nil {
 								logger.Error("Auto update platform meta from YAML failed", "type", e.Type, "error", err)
@@ -84,7 +96,7 @@ func (h *SSHAdapterHandler) ListPlatforms(c *gin.Context) {
 				continue
 			}
 			paramsJSON, _ := json.Marshal(obj)
-			p := model.SSHPlatform{ Type: e.Type, Vendor: e.Vendor, System: e.System, Remark: "imported from auto-ssh.yaml", Params: string(paramsJSON) }
+			p := model.SSHPlatform{Type: e.Type, Vendor: e.Vendor, System: e.System, Remark: "imported from auto-ssh.yaml", Params: string(paramsJSON)}
 			if err2 := database.WithRetry(func(d *gorm.DB) error { return d.Create(&p).Error }, 6, 100*time.Millisecond); err2 != nil {
 				logger.Error("Auto import platform from YAML failed", "type", e.Type, "error", err)
 				continue
@@ -103,7 +115,7 @@ func (h *SSHAdapterHandler) ListPlatforms(c *gin.Context) {
 func ensureDefaultIDOne() {
 	db := database.GetDB()
 	var def model.SSHPlatform
-	if err := db.Where("ssh_type = ?", "default").First(&def).Error; err != nil {
+	if err := db.Where("ssh_type = ?", deviceTypeTagDefault).First(&def).Error; err != nil {
 		return
 	}
 	if def.ID == 1 {
@@ -111,15 +123,23 @@ func ensureDefaultIDOne() {
 	}
 	// 开启事务进行ID调整
 	tx := db.Begin()
-	defer func(){ if r := recover(); r != nil { _ = tx.Rollback() } }()
+	defer func() {
+		if r := recover(); r != nil {
+			_ = tx.Rollback()
+		}
+	}()
 	// 如ID=1存在且不是default，则将其挪到最大ID+1
 	var exist model.SSHPlatform
-	if err := tx.First(&exist, 1).Error; err == nil && exist.Type != "default" {
+	if err := tx.First(&exist, 1).Error; err == nil && exist.Type != deviceTypeTagDefault {
 		var maxID uint
 		row := tx.Model(&model.SSHPlatform{}).Select("MAX(id)").Row()
 		var mx int64
-		if scanErr := row.Scan(&mx); scanErr == nil && mx >= 0 { maxID = uint(mx) }
-		if maxID < 1 { maxID = 1 }
+		if scanErr := row.Scan(&mx); scanErr == nil && mx >= 0 {
+			maxID = uint(mx)
+		}
+		if maxID < 1 {
+			maxID = 1
+		}
 		if err := tx.Exec("UPDATE ssh_platforms SET id = ? WHERE id = ?", maxID+1, exist.ID).Error; err != nil {
 			_ = tx.Rollback()
 			return
@@ -216,7 +236,7 @@ func (h *SSHAdapterHandler) DeletePlatform(c *gin.Context) {
 		c.JSON(http.StatusNotFound, ErrorResponse{Code: "NOT_FOUND", Message: "平台不存在"})
 		return
 	}
-	if p.Type == "default" {
+	if p.Type == deviceTypeTagDefault {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Code: "FORBIDDEN", Message: "default 类型不允许删除"})
 		return
 	}
@@ -316,16 +336,24 @@ func (h *SSHAdapterHandler) GenerateYAML(c *gin.Context) {
 	cfgEntries, _ := loadConfigDeviceDefaultsEntries(filepath.Join("configs", "config.yaml"))
 	if len(cfgEntries) > 0 {
 		present := map[string]struct{}{}
-		for _, e := range entries { present[e.Type] = struct{}{} }
+		for _, e := range entries {
+			present[e.Type] = struct{}{}
+		}
 		for _, ce := range cfgEntries {
-			if _, ok := present[ce.Type]; !ok { entries = append(entries, ce) }
+			if _, ok := present[ce.Type]; !ok {
+				entries = append(entries, ce)
+			}
 		}
 	}
 
 	// 排序保证稳定输出：default 优先，其余按名称
 	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].Type == "default" && entries[j].Type != "default" { return true }
-		if entries[i].Type != "default" && entries[j].Type == "default" { return false }
+		if entries[i].Type == deviceTypeTagDefault && entries[j].Type != deviceTypeTagDefault {
+			return true
+		}
+		if entries[i].Type != deviceTypeTagDefault && entries[j].Type == deviceTypeTagDefault {
+			return false
+		}
 		return entries[i].Type < entries[j].Type
 	})
 
@@ -380,13 +408,18 @@ type platformYAMLEntry struct {
 	YAML   string // 不含顶层键，纯对象块
 }
 
-
 func composeSinglePlatformYAML(e platformYAMLEntry) string {
 	b := &stringsBuilder{}
 	b.WriteString("device_defaults:\n")
-	if e.Vendor != "" { b.WriteString(fmt.Sprintf("  # vendor: %s\n", e.Vendor)) }
-	if e.System != "" { b.WriteString(fmt.Sprintf("  # system: %s\n", e.System)) }
-	if e.Remark != "" { b.WriteString(fmt.Sprintf("  # remark: %s\n", e.Remark)) }
+	if e.Vendor != "" {
+		b.WriteString(fmt.Sprintf("  # vendor: %s\n", e.Vendor))
+	}
+	if e.System != "" {
+		b.WriteString(fmt.Sprintf("  # system: %s\n", e.System))
+	}
+	if e.Remark != "" {
+		b.WriteString(fmt.Sprintf("  # remark: %s\n", e.Remark))
+	}
 	b.WriteString(fmt.Sprintf("  %s:\n", e.Type))
 	b.WriteString(indent("    ", e.YAML))
 	return b.String()
@@ -412,7 +445,8 @@ func indent(prefix, s string) string {
 }
 
 // 简单 strings.Builder 包装，避免不同Go版本的import冲突
-type stringsBuilder struct { b []byte }
+type stringsBuilder struct{ b []byte }
+
 func (sb *stringsBuilder) WriteString(s string) { sb.b = append(sb.b, s...) }
 func (sb *stringsBuilder) String() string       { return string(sb.b) }
 
@@ -420,11 +454,11 @@ func (sb *stringsBuilder) String() string       { return string(sb.b) }
 
 func defaultParamsFor(sshType string) map[string]interface{} {
 	switch sshType {
-	case "default":
+	case deviceTypeTagDefault:
 		return map[string]interface{}{
 			"output_filter": map[string]interface{}{
-				"prefixes":        []string{"---- More ----", "more"},
-				"contains":        []string{"--more--"},
+				"prefixes":         []string{"---- More ----", "more"},
+				"contains":         []string{"--more--"},
 				"case_insensitive": true,
 				"trim_space":       true,
 			},
@@ -433,39 +467,39 @@ func defaultParamsFor(sshType string) map[string]interface{} {
 					{"except_output": "do you want to save this config? yes/no", "command_auto_send": "yes"},
 					{"except_output": "do you want to reload this device? yes/no", "command_auto_send": "no"},
 				},
-				"error_hints":     []string{"ERROR:", "invalid parameters detect"},
+				"error_hints":      []string{"ERROR:", "invalid parameters detect"},
 				"case_insensitive": true,
 				"trim_space":       true,
 			},
 		}
 	case "cisco_ios":
 		return map[string]interface{}{
-			"prompt_suffixes":    []string{">", "#"},
-			"disable_paging_cmds": []string{"terminal length 0"},
-			"config_mode_clis":   []string{"configure terminal"},
-			"config_exit_cli":    "end",
-			"enable_required":    true,
-			"enable_cli":         "enable",
+			"prompt_suffixes":      []string{">", "#"},
+			"disable_paging_cmds":  []string{"terminal length 0"},
+			"config_mode_clis":     []string{"configure terminal"},
+			"config_exit_cli":      "end",
+			"enable_required":      true,
+			"enable_cli":           "enable",
 			"enable_except_output": "Password:",
-			"skip_delayed_echo":  true,
+			"skip_delayed_echo":    true,
 			"timeout": map[string]interface{}{
-				"timeout_all": 60,
+				"timeout_all":  60,
 				"dial_timeout": 2,
 				"auth_timeout": 5,
 				"interact_timeout": map[string]interface{}{
-					"command_interval_ms":      120,
-					"command_timeout_sec":      30,
-					"quiet_after_ms":           800,
-					"quiet_poll_interval_ms":   250,
-					"prompt_inducer_interval_ms": 1000,
-					"prompt_inducer_max_count":   12,
-					"exit_pause_ms":             150,
+					"command_interval_ms":         120,
+					"command_timeout_sec":         30,
+					"quiet_after_ms":              800,
+					"quiet_poll_interval_ms":      250,
+					"prompt_inducer_interval_ms":  1000,
+					"prompt_inducer_max_count":    12,
+					"exit_pause_ms":               150,
 					"enable_password_fallback_ms": 1500,
 				},
 			},
 			"output_filter": map[string]interface{}{
-				"prefixes":        []string{"---- More ----", "more"},
-				"contains":        []string{"--more--"},
+				"prefixes":         []string{"---- More ----", "more"},
+				"contains":         []string{"--more--"},
 				"case_insensitive": true,
 				"trim_space":       true,
 			},
@@ -477,37 +511,37 @@ func defaultParamsFor(sshType string) map[string]interface{} {
 					{"except_output": "confirm", "command_auto_send": "y"},
 					{"except_output": "[yes/no]", "command_auto_send": "yes"},
 				},
-				"error_hints":     []string{"invalid input detected", "incomplete command", "unknown command", "invalid autocommand", "line has invalid autocommand"},
+				"error_hints":      []string{"invalid input detected", "incomplete command", "unknown command", "invalid autocommand", "line has invalid autocommand"},
 				"case_insensitive": true,
 				"trim_space":       true,
 			},
 		}
 	case "huawei":
 		return map[string]interface{}{
-			"prompt_suffixes":    []string{">", "#", "]"},
+			"prompt_suffixes":     []string{">", "#", "]"},
 			"disable_paging_cmds": []string{"screen-length disable"},
-			"config_mode_clis":   []string{"system-view immediately", "system-view"},
-			"config_exit_cli":    "quit",
-			"enable_required":    false,
-			"skip_delayed_echo":  true,
+			"config_mode_clis":    []string{"system-view immediately", "system-view"},
+			"config_exit_cli":     "quit",
+			"enable_required":     false,
+			"skip_delayed_echo":   true,
 			"timeout": map[string]interface{}{
-				"timeout_all": 45,
+				"timeout_all":  45,
 				"dial_timeout": 2,
 				"auth_timeout": 5,
 				"interact_timeout": map[string]interface{}{
-					"command_interval_ms":      120,
-					"command_timeout_sec":      30,
-					"quiet_after_ms":           800,
-					"quiet_poll_interval_ms":   250,
-					"prompt_inducer_interval_ms": 1000,
-					"prompt_inducer_max_count":   12,
-					"exit_pause_ms":             150,
+					"command_interval_ms":         120,
+					"command_timeout_sec":         30,
+					"quiet_after_ms":              800,
+					"quiet_poll_interval_ms":      250,
+					"prompt_inducer_interval_ms":  1000,
+					"prompt_inducer_max_count":    12,
+					"exit_pause_ms":               150,
 					"enable_password_fallback_ms": 1500,
 				},
 			},
 			"output_filter": map[string]interface{}{
-				"prefixes":        []string{"---- More ----", "more"},
-				"contains":        []string{"--more--"},
+				"prefixes":         []string{"---- More ----", "more"},
+				"contains":         []string{"--more--"},
 				"case_insensitive": true,
 				"trim_space":       true,
 			},
@@ -517,7 +551,7 @@ func defaultParamsFor(sshType string) map[string]interface{} {
 					{"except_output": "press any key", "command_auto_send": " "},
 					{"except_output": "confirm", "command_auto_send": "y"},
 				},
-				"error_hints":     []string{"error:", "unrecognized command"},
+				"error_hints":      []string{"error:", "unrecognized command"},
 				"case_insensitive": true,
 				"trim_space":       true,
 			},
@@ -526,16 +560,16 @@ func defaultParamsFor(sshType string) map[string]interface{} {
 		// 其他平台以default为基础
 		return map[string]interface{}{
 			"output_filter": map[string]interface{}{
-				"prefixes":        []string{"---- More ----", "more"},
-				"contains":        []string{"--more--"},
+				"prefixes":         []string{"---- More ----", "more"},
+				"contains":         []string{"--more--"},
 				"case_insensitive": true,
 				"trim_space":       true,
 			},
 			"interact": map[string]interface{}{
 				"auto_interactions": []map[string]string{},
-				"error_hints":     []string{"error"},
-				"case_insensitive": true,
-				"trim_space":       true,
+				"error_hints":       []string{"error"},
+				"case_insensitive":  true,
+				"trim_space":        true,
 			},
 		}
 	}
@@ -547,9 +581,15 @@ func composeCollectorYAML(entries []platformYAMLEntry) string {
 	b.WriteString("collector:\n")
 	b.WriteString("  device_defaults:\n")
 	for _, e := range entries {
-		if e.Vendor != "" { b.WriteString(fmt.Sprintf("    # vendor: %s\n", e.Vendor)) }
-		if e.System != "" { b.WriteString(fmt.Sprintf("    # system: %s\n", e.System)) }
-		if e.Remark != "" { b.WriteString(fmt.Sprintf("    # remark: %s\n", e.Remark)) }
+		if e.Vendor != "" {
+			b.WriteString(fmt.Sprintf("    # vendor: %s\n", e.Vendor))
+		}
+		if e.System != "" {
+			b.WriteString(fmt.Sprintf("    # system: %s\n", e.System))
+		}
+		if e.Remark != "" {
+			b.WriteString(fmt.Sprintf("    # remark: %s\n", e.Remark))
+		}
 		b.WriteString(fmt.Sprintf("    %s:\n", e.Type))
 		b.WriteString(indent("      ", e.YAML))
 	}
@@ -559,10 +599,14 @@ func composeCollectorYAML(entries []platformYAMLEntry) string {
 // 新增：从配置文件解析 collector.device_defaults 作为平台条目（保留注释中的 vendor/system/remark）
 func loadConfigDeviceDefaultsEntries(path string) ([]platformYAMLEntry, error) {
 	data, err := os.ReadFile(path)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil { return nil, err }
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("invalid yaml root in %s", path)
 	}
@@ -570,8 +614,12 @@ func loadConfigDeviceDefaultsEntries(path string) ([]platformYAMLEntry, error) {
 
 	// 查找 collector.device_defaults 或顶层 device_defaults
 	dd := findMapValue(root, "collector")
-	if dd != nil { dd = findMapValue(dd, "device_defaults") }
-	if dd == nil { dd = findMapValue(root, "device_defaults") }
+	if dd != nil {
+		dd = findMapValue(dd, "device_defaults")
+	}
+	if dd == nil {
+		dd = findMapValue(root, "device_defaults")
+	}
 	if dd == nil || dd.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("device_defaults not found in %s", path)
 	}
@@ -602,14 +650,20 @@ func loadConfigDeviceDefaultsEntries(path string) ([]platformYAMLEntry, error) {
 
 		// 序列化该平台的 YAML 片段
 		yb, err := yaml.Marshal(valNode)
-		if err != nil { return nil, err }
-		entries = append(entries, platformYAMLEntry{ Type: sshType, Vendor: vendor, System: system, Remark: remark, YAML: string(yb) })
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, platformYAMLEntry{Type: sshType, Vendor: vendor, System: system, Remark: remark, YAML: string(yb)})
 	}
 
 	// 稳定排序
 	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].Type == "default" && entries[j].Type != "default" { return true }
-		if entries[i].Type != "default" && entries[j].Type == "default" { return false }
+		if entries[i].Type == deviceTypeTagDefault && entries[j].Type != deviceTypeTagDefault {
+			return true
+		}
+		if entries[i].Type != deviceTypeTagDefault && entries[j].Type == deviceTypeTagDefault {
+			return false
+		}
 		return entries[i].Type < entries[j].Type
 	})
 	return entries, nil
@@ -617,11 +671,15 @@ func loadConfigDeviceDefaultsEntries(path string) ([]platformYAMLEntry, error) {
 
 // 辅助：在映射节点中按键查找子节点
 func findMapValue(m *yaml.Node, key string) *yaml.Node {
-	if m == nil || m.Kind != yaml.MappingNode { return nil }
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil
+	}
 	for i := 0; i < len(m.Content)-1; i += 2 {
 		k := m.Content[i]
 		v := m.Content[i+1]
-		if k.Value == key { return v }
+		if k.Value == key {
+			return v
+		}
 	}
 	return nil
 }

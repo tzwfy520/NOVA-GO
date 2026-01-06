@@ -7,10 +7,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
 	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
 	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-	"gorm.io/gorm"
 )
 
 // SimCmdHandler 模拟命令处理器

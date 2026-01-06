@@ -1,22 +1,29 @@
 package handler
 
 import (
-    "encoding/json"
-    "fmt"
-    "net/http"
-    "os"
-    "path/filepath"
-    "strings"
-    "time"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
-    "github.com/gin-gonic/gin"
-    "github.com/sshcollectorpro/sshcollectorpro/internal/service"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-    "golang.org/x/sync/errgroup"
-    // 新增导入
-    "github.com/sshcollectorpro/sshcollectorpro/internal/database"
-    "github.com/sshcollectorpro/sshcollectorpro/internal/model"
-    "gorm.io/gorm"
+	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/errgroup"
+	"gorm.io/gorm"
+
+	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/service"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+)
+
+const (
+	respCodeSuccess        = "SUCCESS"
+	respCodePartialSuccess = "PARTIAL_SUCCESS"
+
+	collectProtocolSSH = "ssh"
 )
 
 // CollectorHandler 采集器处理器
@@ -55,8 +62,8 @@ type FastCollectRequest struct {
 	DevicePlatform  string   `json:"device_platform,omitempty"`
 	CollectProtocol string   `json:"collect_protocol,omitempty"`
 	RetryFlag       *int     `json:"retry_flag,omitempty"`
-	Timeout         *int     `json:"timeout,omitempty"`       // 兼容示例中的 timeout
-	TaskTimeout     *int     `json:"task_timeout,omitempty"`  // 同义字段
+	Timeout         *int     `json:"timeout,omitempty"`      // 兼容示例中的 timeout
+	TaskTimeout     *int     `json:"task_timeout,omitempty"` // 同义字段
 	UserName        string   `json:"user_name"`
 	Password        string   `json:"password"`
 	EnablePassword  string   `json:"enable_password,omitempty"`
@@ -80,7 +87,9 @@ func (h *CollectorHandler) FastCollect(c *gin.Context) {
 	}
 	// 默认协议为 ssh
 	proto := strings.TrimSpace(strings.ToLower(req.CollectProtocol))
-	if proto == "" { proto = "ssh" }
+	if proto == "" {
+		proto = collectProtocolSSH
+	}
 
 	r := service.CollectRequest{
 		TaskID:          fmt.Sprintf("fast-%d", time.Now().UnixNano()),
@@ -97,7 +106,7 @@ func (h *CollectorHandler) FastCollect(c *gin.Context) {
 		RetryFlag:       req.RetryFlag,
 		TaskTimeout:     effTimeout,
 		DeviceTimeout:   req.DeviceTimeout,
-		Metadata:        map[string]interface{}{ "collect_mode": "fast" },
+		Metadata:        map[string]interface{}{"collect_mode": "fast"},
 	}
 
 	// 参数校验
@@ -119,7 +128,7 @@ func (h *CollectorHandler) FastCollect(c *gin.Context) {
 	enc := json.NewEncoder(c.Writer)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(gin.H{
-		"code":    "SUCCESS",
+		"code":    respCodeSuccess,
 		"message": "快速采集完成",
 		"data":    resp,
 	})
@@ -196,7 +205,7 @@ func (h *CollectorHandler) CancelTask(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, SuccessResponse{
-		Code:    "SUCCESS",
+		Code:    respCodeSuccess,
 		Message: "任务已取消",
 		Data:    gin.H{"task_id": taskID},
 	})
@@ -213,7 +222,7 @@ func (h *CollectorHandler) CancelTask(c *gin.Context) {
 func (h *CollectorHandler) GetStats(c *gin.Context) {
 	stats := h.collectorService.GetStats()
 	c.JSON(http.StatusOK, gin.H{
-		"code":    "SUCCESS",
+		"code":    respCodeSuccess,
 		"message": "获取统计信息成功",
 		"data":    stats,
 	})
@@ -241,7 +250,7 @@ func (h *CollectorHandler) Health(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, SuccessResponse{
-		Code:    "SUCCESS",
+		Code:    respCodeSuccess,
 		Message: "服务正常",
 		Data:    stats,
 	})
@@ -324,7 +333,7 @@ func (h *CollectorHandler) BatchExecute(c *gin.Context) {
 	enc.SetEscapeHTML(false)
 	encodeStart := time.Now()
 	_ = enc.Encode(gin.H{
-		"code":    "SUCCESS",
+		"code":    respCodeSuccess,
 		"message": "批量任务执行完成",
 		"data":    responses,
 		"total":   len(responses),
@@ -422,26 +431,27 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 	if k > len(req.Devices) {
 		k = len(req.Devices)
 	}
-    if k <= 0 {
-        k = 1
-    }
+	if k <= 0 {
+		k = 1
+	}
 
-    // 生成批次级日志文件路径（任务级，不按设备）
-    batchStart := time.Now()
-    logDir := filepath.Join("logs", "collection")
-    _ = os.MkdirAll(logDir, 0o755)
-    batchLogName := fmt.Sprintf("%s_%s.log", strings.TrimSpace(req.TaskID), batchStart.Format("20060102_150405"))
-    batchLogPath := filepath.Join(logDir, batchLogName)
-    // 确保文件存在
-    if f, err := os.OpenFile(batchLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil { f.Close() }
+	// 生成批次级日志文件路径（任务级，不按设备）
+	batchStart := time.Now()
+	logDir := filepath.Join("logs", "collection")
+	_ = os.MkdirAll(logDir, 0o755)
+	batchLogName := fmt.Sprintf("%s_%s.log", strings.TrimSpace(req.TaskID), batchStart.Format("20060102_150405"))
+	batchLogPath := filepath.Join(logDir, batchLogName)
+	// 确保文件存在
+	if f, err := os.OpenFile(batchLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		f.Close()
+	}
 
-    responses := make([]map[string]interface{}, len(req.Devices))
+	responses := make([]map[string]interface{}, len(req.Devices))
 	reqCtx := c.Request.Context()
 	sem := make(chan struct{}, k)
 	g, ctx := errgroup.WithContext(reqCtx)
 
 	for i, d := range req.Devices {
-		i, d := i, d // capture loop vars
 		g.Go(func() error {
 			// 并发控制
 			select {
@@ -496,20 +506,20 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 				}
 			}
 
-            responses[i] = map[string]interface{}{
-                "device_ip":       d.DeviceIP,
-                "port":            d.Port,
-                "device_name":     d.DeviceName,
-                "device_platform": d.DevicePlatform,
-                "task_id":         resp.TaskID,
-                "success":         resp.Success,
-                "results":         resp.Results,
-                "error":           resp.Error,
-                "duration_ms":     resp.DurationMS,
-                "timestamp":       resp.Timestamp,
-            }
-            return nil
-        })
+			responses[i] = map[string]interface{}{
+				"device_ip":       d.DeviceIP,
+				"port":            d.Port,
+				"device_name":     d.DeviceName,
+				"device_platform": d.DevicePlatform,
+				"task_id":         resp.TaskID,
+				"success":         resp.Success,
+				"results":         resp.Results,
+				"error":           resp.Error,
+				"duration_ms":     resp.DurationMS,
+				"timestamp":       resp.Timestamp,
+			}
+			return nil
+		})
 	}
 
 	_ = g.Wait()
@@ -522,12 +532,12 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 		}
 	}
 
-	respCode := "SUCCESS"
+	respCode := respCodeSuccess
 	respMsg := "自定义批量任务执行完成"
 	// 与备份接口对齐：全部或部分失败均返回 PARTIAL_SUCCESS，不返回 FAILED
 	if successCount < len(responses) {
 		// 包括 successCount == 0（全部失败）和部分成功
-		respCode = "PARTIAL_SUCCESS"
+		respCode = respCodePartialSuccess
 		if successCount == 0 {
 			respMsg = "自定义批量任务全部失败"
 		} else {
@@ -541,13 +551,13 @@ func (h *CollectorHandler) BatchExecuteCustomer(c *gin.Context) {
 	enc := json.NewEncoder(c.Writer)
 	enc.SetEscapeHTML(false)
 	encodeStart := time.Now()
-    _ = enc.Encode(gin.H{
-        "code":          respCode,
-        "message":       respMsg,
-        "data":          responses,
-        "total":         len(responses),
-        "log_file_path": batchLogPath,
-    })
+	_ = enc.Encode(gin.H{
+		"code":          respCode,
+		"message":       respMsg,
+		"data":          responses,
+		"total":         len(responses),
+		"log_file_path": batchLogPath,
+	})
 	encodeDur := time.Since(encodeStart)
 	logger.Info("BatchExecuteCustomer response encoded", "path", c.FullPath(), "size_bytes", c.Writer.Size(), "duration_ms", encodeDur.Milliseconds(), "count", len(responses))
 }
@@ -594,25 +604,26 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 	if k > len(req.DeviceList) {
 		k = len(req.DeviceList)
 	}
-    if k <= 0 {
-        k = 1
-    }
+	if k <= 0 {
+		k = 1
+	}
 
-    // 生成批次级日志文件路径（任务级，不按设备）
-    batchStart := time.Now()
-    logDir := filepath.Join("logs", "collection")
-    _ = os.MkdirAll(logDir, 0o755)
-    batchLogName := fmt.Sprintf("%s_%s.log", strings.TrimSpace(req.TaskID), batchStart.Format("20060102_150405"))
-    batchLogPath := filepath.Join(logDir, batchLogName)
-    if f, err := os.OpenFile(batchLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil { f.Close() }
+	// 生成批次级日志文件路径（任务级，不按设备）
+	batchStart := time.Now()
+	logDir := filepath.Join("logs", "collection")
+	_ = os.MkdirAll(logDir, 0o755)
+	batchLogName := fmt.Sprintf("%s_%s.log", strings.TrimSpace(req.TaskID), batchStart.Format("20060102_150405"))
+	batchLogPath := filepath.Join(logDir, batchLogName)
+	if f, err := os.OpenFile(batchLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		f.Close()
+	}
 
-    responses := make([]map[string]interface{}, len(req.DeviceList))
+	responses := make([]map[string]interface{}, len(req.DeviceList))
 	reqCtx := c.Request.Context()
 	sem := make(chan struct{}, k)
 	g, ctx := errgroup.WithContext(reqCtx)
 
 	for i, d := range req.DeviceList {
-		i, d := i, d // capture loop vars
 		g.Go(func() error {
 			// 并发控制
 			select {
@@ -685,20 +696,20 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 				}
 			}
 
-            responses[i] = map[string]interface{}{
-                "device_ip":       d.DeviceIP,
-                "port":            d.Port,
-                "device_name":     d.DeviceName,
-                "device_platform": d.DevicePlatform,
-                "task_id":         resp.TaskID,
-                "success":         resp.Success,
-                "results":         resp.Results,
-                "error":           resp.Error,
-                "duration_ms":     resp.DurationMS,
-                "timestamp":       resp.Timestamp,
-            }
-            return nil
-        })
+			responses[i] = map[string]interface{}{
+				"device_ip":       d.DeviceIP,
+				"port":            d.Port,
+				"device_name":     d.DeviceName,
+				"device_platform": d.DevicePlatform,
+				"task_id":         resp.TaskID,
+				"success":         resp.Success,
+				"results":         resp.Results,
+				"error":           resp.Error,
+				"duration_ms":     resp.DurationMS,
+				"timestamp":       resp.Timestamp,
+			}
+			return nil
+		})
 	}
 
 	_ = g.Wait()
@@ -711,10 +722,10 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 		}
 	}
 
-	respCode := "SUCCESS"
+	respCode := respCodeSuccess
 	respMsg := "系统预制批量任务执行完成"
 	if successCount < len(responses) {
-		respCode = "PARTIAL_SUCCESS"
+		respCode = respCodePartialSuccess
 		if successCount == 0 {
 			respMsg = "系统预制批量任务全部失败"
 		} else {
@@ -728,13 +739,13 @@ func (h *CollectorHandler) BatchExecuteSystem(c *gin.Context) {
 	enc := json.NewEncoder(c.Writer)
 	enc.SetEscapeHTML(false)
 	encodeStart := time.Now()
-    _ = enc.Encode(gin.H{
-        "code":          respCode,
-        "message":       respMsg,
-        "data":          responses,
-        "total":         len(responses),
-        "log_file_path": batchLogPath,
-    })
+	_ = enc.Encode(gin.H{
+		"code":          respCode,
+		"message":       respMsg,
+		"data":          responses,
+		"total":         len(responses),
+		"log_file_path": batchLogPath,
+	})
 	encodeDur := time.Since(encodeStart)
 	logger.Info("BatchExecuteSystem response encoded", "path", c.FullPath(), "size_bytes", c.Writer.Size(), "duration_ms", encodeDur.Milliseconds(), "count", len(responses))
 }
@@ -797,7 +808,7 @@ func (h *CollectorHandler) GetCollectorSettings(c *gin.Context) {
 	if err := db.First(&s, 1).Error; err != nil {
 		// 无记录时返回默认值
 		c.JSON(http.StatusOK, gin.H{
-			"code":    "SUCCESS",
+			"code":    respCodeSuccess,
 			"message": "获取设置成功",
 			"data": gin.H{
 				"retry_flag": 0,
@@ -807,7 +818,7 @@ func (h *CollectorHandler) GetCollectorSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"code":    "SUCCESS",
+		"code":    respCodeSuccess,
 		"message": "获取设置成功",
 		"data": gin.H{
 			"retry_flag": s.RetryFlag,
@@ -846,8 +857,8 @@ func (h *CollectorHandler) UpdateCollectorSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"code":    "SUCCESS",
+		"code":    respCodeSuccess,
 		"message": "保存设置成功",
-		"data": gin.H{"retry_flag": s.RetryFlag, "timeout": s.Timeout},
+		"data":    gin.H{"retry_flag": s.RetryFlag, "timeout": s.Timeout},
 	})
 }

@@ -8,5 +8,5 @@ var ExtraRoutesFunc func(r *gin.Engine)
 
 // RegisterExtraRoutes 允许外部在初始化阶段注册扩展路由函数。
 func RegisterExtraRoutes(f func(r *gin.Engine)) {
-    ExtraRoutesFunc = f
+	ExtraRoutesFunc = f
 }

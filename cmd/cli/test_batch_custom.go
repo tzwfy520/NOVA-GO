@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -137,7 +138,7 @@ func trimLines(s string, limit int) string {
 
 // wrap a single line by rune count width
 func wrapLineByRune(s string, width int) []string {
-	if width <= 0 || len(s) == 0 {
+	if width <= 0 || s == "" {
 		return []string{s}
 	}
 	rs := []rune(s)
@@ -171,15 +172,15 @@ func buildWrappedLines(raw string, width int, limit int) []string {
 }
 
 // kill listening process(es) on a TCP port (macOS using lsof)
-func killListeningOnPort(port int) ([]int, error) {
+func killListeningOnPort(port int) []int {
 	if port <= 0 {
-		return nil, nil
+		return nil
 	}
 	cmd := exec.Command("lsof", "-nP", fmt.Sprintf("-iTCP:%d", port), "-sTCP:LISTEN", "-t")
 	out, err := cmd.Output()
 	if err != nil {
 		// if lsof not available or no listeners, return empty
-		return nil, nil
+		return nil
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	pids := make([]int, 0, len(lines))
@@ -200,7 +201,7 @@ func killListeningOnPort(port int) ([]int, error) {
 		time.Sleep(300 * time.Millisecond)
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
-	return pids, nil
+	return pids
 }
 
 // parse host and port from base server URL, fallback to defaultPort
@@ -289,7 +290,7 @@ func main() {
 
 	// Kill port if requested
 	if *killPort > 0 {
-		pids, _ := killListeningOnPort(*killPort)
+		pids := killListeningOnPort(*killPort)
 		if len(pids) > 0 {
 			fmt.Printf("Killed %d process(es) listening on port %d: %v\n", len(pids), *killPort, pids)
 			// brief wait for port release
@@ -438,7 +439,9 @@ func main() {
 	url := strings.TrimRight(*server, "/") + *path
 	client := &http.Client{Timeout: time.Duration(*timeout) * time.Second}
 
-	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	reqCtx, cancelReq := context.WithTimeout(context.Background(), time.Duration(*timeout)*time.Second)
+	defer cancelReq()
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create request: %v\n", err)
 		os.Exit(1)

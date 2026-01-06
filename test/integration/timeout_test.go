@@ -44,7 +44,7 @@ func TestTimeoutAllConfiguration(t *testing.T) {
 
 	// 测试获取未配置平台的timeout_all（应该返回默认值）
 	unknownTimeout := cfg.GetTimeoutAll("unknown")
-	assert.Equal(t, 60, unknownTimeout, "未知平台应该返回默认值60秒")
+	assert.Equal(t, 30, unknownTimeout, "未知平台应该返回全局默认值30秒")
 }
 
 // TestCollectorServiceTimeoutInterruption 测试收集器服务的超时中断功能

@@ -1,22 +1,24 @@
 package service
 
 import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "os"
-    "path/filepath"
-    "strings"
-    "sync"
-    "time"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 
-    "github.com/sshcollectorpro/sshcollectorpro/internal/config"
-    "github.com/sshcollectorpro/sshcollectorpro/internal/model"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
-    "github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
+	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/ssh"
 )
 
-// CollectorService 采集器服务
+const unknownValue = "<unknown>"
+
+// CollectorService 采集服务
 type CollectorService struct {
 	config   *config.Config
 	sshPool  *ssh.Pool
@@ -29,13 +31,13 @@ type CollectorService struct {
 
 // TaskContext 任务上下文
 type TaskContext struct {
-    Task                    *model.Task
-    Cancel                  context.CancelFunc
-    StartTime               time.Time
-    DeviceInteractStartTime time.Time  // 设备交互开始时间
-    DeviceInteractDuration  time.Duration // 设备交互时长
-    Status                  string
-    LogFilePath             string
+	Task                    *model.Task
+	Cancel                  context.CancelFunc
+	StartTime               time.Time
+	DeviceInteractStartTime time.Time     // 设备交互开始时间
+	DeviceInteractDuration  time.Duration // 设备交互时长
+	Status                  string
+	LogFilePath             string
 }
 
 // CollectRequest 采集请求
@@ -60,139 +62,89 @@ type CollectRequest struct {
 
 // CollectResponse 采集响应
 type CollectResponse struct {
-    TaskID     string                 `json:"task_id"`
-    Success    bool                   `json:"success"`
-    Results    []*CommandResultView   `json:"results"`
-    Error      string                 `json:"error"`
-    Duration   time.Duration          `json:"duration"`
-    DurationMS int64                  `json:"duration_ms"`
-    Timestamp  time.Time              `json:"timestamp"`
-    Metadata   map[string]interface{} `json:"metadata"`
-    LogFilePath string                `json:"log_file_path,omitempty"`
+	TaskID      string                 `json:"task_id"`
+	Success     bool                   `json:"success"`
+	Results     []*CommandResultView   `json:"results"`
+	Error       string                 `json:"error"`
+	Duration    time.Duration          `json:"duration"`
+	DurationMS  int64                  `json:"duration_ms"`
+	Timestamp   time.Time              `json:"timestamp"`
+	Metadata    map[string]interface{} `json:"metadata"`
+	LogFilePath string                 `json:"log_file_path,omitempty"`
 }
 
 // 内置交互默认值结构（替代原 addone/interact）
 type platformInteractDefaults struct {
-    Timeout           int
-    Retries           int
-    Threads           int
-    Concurrent        int
-    PromptSuffixes    []string
-    CommandIntervalMS int
-    AutoInteractions  []struct{ ExpectOutput, AutoSend string }
-    ErrorHints        []string
-    SkipDelayedEcho   bool
-    // 交互匹配选项（平台 interact 配置）
-    InteractCaseInsensitive bool
-    InteractTrimSpace       bool
-    // 新增：交互时序与节奏参数
-    CommandTimeoutSec        int
-    QuietAfterMS             int
-    QuietPollIntervalMS      int
-    EnablePasswordFallbackMS int
-    PromptInducerIntervalMS  int
-    PromptInducerMaxCount    int
-    ExitPauseMS              int
-    LongOutputCommands       []string
+	Timeout           int
+	Retries           int
+	Threads           int
+	Concurrent        int
+	PromptSuffixes    []string
+	CommandIntervalMS int
+	AutoInteractions  []struct{ ExpectOutput, AutoSend string }
+	ErrorHints        []string
+	SkipDelayedEcho   bool
+	// 交互匹配选项（平台 interact 配置）
+	InteractCaseInsensitive bool
+	InteractTrimSpace       bool
+	// 新增：交互时序与节奏参数
+	CommandTimeoutSec        int
+	QuietAfterMS             int
+	QuietPollIntervalMS      int
+	EnablePasswordFallbackMS int
+	PromptInducerIntervalMS  int
+	PromptInducerMaxCount    int
+	ExitPauseMS              int
+	LongOutputCommands       []string
 }
 
 // getPlatformDefaults 仅从配置读取平台默认，若平台缺失则兜底使用 default
 func getPlatformDefaults(platform string) platformInteractDefaults {
-	p := strings.TrimSpace(strings.ToLower(platform))
 	base := platformInteractDefaults{}
 	if cfg := config.Get(); cfg != nil {
-        if dd, ok := cfg.Collector.DeviceDefaults[p]; ok {
-            // 平台超时（优先使用嵌套 timeout.timeout_all）
-            if dd.Timeout.TimeoutAll > 0 {
-                base.Timeout = dd.Timeout.TimeoutAll
-            }
-            if len(dd.PromptSuffixes) > 0 {
-                base.PromptSuffixes = dd.PromptSuffixes
-            }
-            base.SkipDelayedEcho = dd.SkipDelayedEcho
-            if len(dd.LongOutputCommands) > 0 {
-                base.LongOutputCommands = dd.LongOutputCommands
-            }
-            // 优先使用平台嵌套 interact，其次兼容旧字段
-            if len(dd.Interact.ErrorHints) > 0 {
-                base.ErrorHints = dd.Interact.ErrorHints
-            } else if len(dd.ErrorHints) > 0 {
-                base.ErrorHints = dd.ErrorHints
-            }
-			if len(dd.Interact.AutoInteractions) > 0 {
-				mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.Interact.AutoInteractions))
-				for _, ai := range dd.Interact.AutoInteractions {
-					eo := strings.TrimSpace(ai.ExpectOutput)
-					as := strings.TrimSpace(ai.AutoSend)
-					if eo == "" || as == "" {
-						continue
-					}
-					mapped = append(mapped, struct{ ExpectOutput, AutoSend string }{ExpectOutput: eo, AutoSend: as})
-				}
-				if len(mapped) > 0 {
-					base.AutoInteractions = mapped
-				}
+		// 先合并全局交互节奏：ssh.timeout.interact_timeout.*（平台未配置时兜底）
+		if cfg.SSH.Interact.CommandIntervalMS > 0 {
+			base.CommandIntervalMS = cfg.SSH.Interact.CommandIntervalMS
+		}
+		if cfg.SSH.Interact.CommandTimeoutSec > 0 {
+			base.CommandTimeoutSec = cfg.SSH.Interact.CommandTimeoutSec
+		}
+		if cfg.SSH.Interact.QuietAfterMS > 0 {
+			base.QuietAfterMS = cfg.SSH.Interact.QuietAfterMS
+		}
+		if cfg.SSH.Interact.QuietPollIntervalMS > 0 {
+			base.QuietPollIntervalMS = cfg.SSH.Interact.QuietPollIntervalMS
+		}
+		if cfg.SSH.Interact.EnablePasswordFallbackMS > 0 {
+			base.EnablePasswordFallbackMS = cfg.SSH.Interact.EnablePasswordFallbackMS
+		}
+		if cfg.SSH.Interact.PromptInducerIntervalMS > 0 {
+			base.PromptInducerIntervalMS = cfg.SSH.Interact.PromptInducerIntervalMS
+		}
+		if cfg.SSH.Interact.PromptInducerMaxCount > 0 {
+			base.PromptInducerMaxCount = cfg.SSH.Interact.PromptInducerMaxCount
+		}
+		if cfg.SSH.Interact.ExitPauseMS > 0 {
+			base.ExitPauseMS = cfg.SSH.Interact.ExitPauseMS
+		}
+
+		dd, _, ok := cfg.GetDeviceDefaults(platform)
+		if ok {
+			if dd.Timeout.TimeoutAll > 0 {
+				base.Timeout = dd.Timeout.TimeoutAll
 			}
-			base.InteractCaseInsensitive = dd.Interact.CaseInsensitive
-			base.InteractTrimSpace = dd.Interact.TrimSpace
-			// 节奏与时序参数（优先使用平台 timeout.interact_timeout 块）
-			if dd.Timeout.Interact.CommandIntervalMS > 0 {
-				base.CommandIntervalMS = dd.Timeout.Interact.CommandIntervalMS
-			} else if dd.CommandIntervalMS > 0 {
-				base.CommandIntervalMS = dd.CommandIntervalMS
+			if len(dd.PromptSuffixes) > 0 {
+				base.PromptSuffixes = dd.PromptSuffixes
 			}
-			if dd.Timeout.Interact.CommandTimeoutSec > 0 {
-				base.CommandTimeoutSec = dd.Timeout.Interact.CommandTimeoutSec
-			} else if dd.CommandTimeoutSec > 0 {
-				base.CommandTimeoutSec = dd.CommandTimeoutSec
+			base.SkipDelayedEcho = dd.SkipDelayedEcho
+			if len(dd.LongOutputCommands) > 0 {
+				base.LongOutputCommands = dd.LongOutputCommands
 			}
-			if dd.Timeout.Interact.QuietAfterMS > 0 {
-				base.QuietAfterMS = dd.Timeout.Interact.QuietAfterMS
-			} else if dd.QuietAfterMS > 0 {
-				base.QuietAfterMS = dd.QuietAfterMS
+			if len(dd.Interact.ErrorHints) > 0 {
+				base.ErrorHints = dd.Interact.ErrorHints
+			} else if len(dd.ErrorHints) > 0 {
+				base.ErrorHints = dd.ErrorHints
 			}
-			if dd.Timeout.Interact.QuietPollIntervalMS > 0 {
-				base.QuietPollIntervalMS = dd.Timeout.Interact.QuietPollIntervalMS
-			} else if dd.QuietPollIntervalMS > 0 {
-				base.QuietPollIntervalMS = dd.QuietPollIntervalMS
-			}
-			if dd.Timeout.Interact.EnablePasswordFallbackMS > 0 {
-				base.EnablePasswordFallbackMS = dd.Timeout.Interact.EnablePasswordFallbackMS
-			} else if dd.EnablePasswordFallbackMS > 0 {
-				base.EnablePasswordFallbackMS = dd.EnablePasswordFallbackMS
-			}
-			if dd.Timeout.Interact.PromptInducerIntervalMS > 0 {
-				base.PromptInducerIntervalMS = dd.Timeout.Interact.PromptInducerIntervalMS
-			} else if dd.PromptInducerIntervalMS > 0 {
-				base.PromptInducerIntervalMS = dd.PromptInducerIntervalMS
-			}
-			if dd.Timeout.Interact.PromptInducerMaxCount > 0 {
-				base.PromptInducerMaxCount = dd.Timeout.Interact.PromptInducerMaxCount
-			} else if dd.PromptInducerMaxCount > 0 {
-				base.PromptInducerMaxCount = dd.PromptInducerMaxCount
-			}
-			if dd.Timeout.Interact.ExitPauseMS > 0 {
-				base.ExitPauseMS = dd.Timeout.Interact.ExitPauseMS
-			} else if dd.ExitPauseMS > 0 {
-				base.ExitPauseMS = dd.ExitPauseMS
-			}
-        } else if dd, ok := cfg.Collector.DeviceDefaults["default"]; ok {
-            // 平台未命中时，使用 default 平台的配置与嵌套 timeout
-            if dd.Timeout.TimeoutAll > 0 {
-                base.Timeout = dd.Timeout.TimeoutAll
-            }
-            if len(dd.PromptSuffixes) > 0 {
-                base.PromptSuffixes = dd.PromptSuffixes
-            }
-            base.SkipDelayedEcho = dd.SkipDelayedEcho
-            if len(dd.LongOutputCommands) > 0 {
-                base.LongOutputCommands = dd.LongOutputCommands
-            }
-            if len(dd.Interact.ErrorHints) > 0 {
-                base.ErrorHints = dd.Interact.ErrorHints
-            } else if len(dd.ErrorHints) > 0 {
-                base.ErrorHints = dd.ErrorHints
-            }
 			if len(dd.Interact.AutoInteractions) > 0 {
 				mapped := make([]struct{ ExpectOutput, AutoSend string }, 0, len(dd.Interact.AutoInteractions))
 				for _, ai := range dd.Interact.AutoInteractions {
@@ -222,7 +174,6 @@ func getPlatformDefaults(platform string) platformInteractDefaults {
 			}
 			base.InteractCaseInsensitive = dd.Interact.CaseInsensitive
 			base.InteractTrimSpace = dd.Interact.TrimSpace
-			// 节奏与时序参数（default；优先嵌套）
 			if dd.Timeout.Interact.CommandIntervalMS > 0 {
 				base.CommandIntervalMS = dd.Timeout.Interact.CommandIntervalMS
 			} else if dd.CommandIntervalMS > 0 {
@@ -379,10 +330,10 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 	}
 
 	interactDefaults := getPlatformDefaults(platform)
-	
+
 	// 获取timeout_all配置（系统强制中断超时）
 	timeoutAll := s.config.GetTimeoutAll(platform)
-	
+
 	// 计算有效超时与重试（用于队列等待与任务上下文）
 	effTimeout := 30
 	if request.TaskTimeout != nil && *request.TaskTimeout > 0 {
@@ -409,95 +360,31 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 		return nil, fmt.Errorf("task queue wait timeout after %ds: %w", effTimeout, waitCtx.Err())
 	}
 
-    startTime := time.Now()
-    // 按需创建按任务日志文件：logs/collection/<task_id>_<YYYYMMDD_HHMMSS>.log
-    logDir := filepath.Join("logs", "collection")
-    _ = os.MkdirAll(logDir, 0o755)
-    logName := fmt.Sprintf("%s_%s.log", strings.TrimSpace(request.TaskID), time.Now().Format("20060102_150405"))
-    logPath := filepath.Join(logDir, logName)
+	startTime := time.Now()
+	// 按需创建按任务日志文件：logs/collection/<task_id>_<YYYYMMDD_HHMMSS>.log
+	logDir := filepath.Join("logs", "collection")
+	_ = os.MkdirAll(logDir, 0o755)
+	logName := fmt.Sprintf("%s_%s.log", strings.TrimSpace(request.TaskID), time.Now().Format("20060102_150405"))
+	logPath := filepath.Join(logDir, logName)
 
-    response := &CollectResponse{
-        TaskID:     request.TaskID,
-        Timestamp:  startTime,
-        Metadata:   request.Metadata,
-        LogFilePath: logPath,
-    }
+	response := &CollectResponse{
+		TaskID:      request.TaskID,
+		Timestamp:   startTime,
+		Metadata:    request.Metadata,
+		LogFilePath: logPath,
+	}
 
 	// 以上已解析平台与有效超时/重试
 
-	// 构造命令清单：以平台配置为依据，注入必要的预命令（enable、分页关闭），再追加用户命令
-	// 注：路由层不注入任何平台默认命令，服务层负责按设备平台动态插入
-	commands := make([]string, 0, len(request.CliList)+4)
-	// 预命令注入
-	preCmds := func() []string {
-		out := make([]string, 0, 4)
-		p := strings.TrimSpace(strings.ToLower(request.DevicePlatform))
-		if p == "" {
-			return out
-		}
-		// 查找设备默认配置
-		dd, ok := s.config.Collector.DeviceDefaults[p]
-		if !ok {
-			if strings.HasPrefix(p, "huawei") {
-				dd, ok = s.config.Collector.DeviceDefaults["huawei"]
-			} else if strings.HasPrefix(p, "h3c") {
-				dd, ok = s.config.Collector.DeviceDefaults["h3c"]
-			} else if strings.HasPrefix(p, "cisco") {
-				dd, ok = s.config.Collector.DeviceDefaults["cisco_ios"]
-			}
-		}
-		if !ok {
-			return out
-		}
-
-		// 避免重复：若用户命令里已有相同命令，则不再注入
-		hasCmd := func(cmd string) bool {
-			key := strings.ToLower(strings.TrimSpace(cmd))
-			for _, c := range request.CliList {
-				if strings.ToLower(strings.TrimSpace(c)) == key {
-					return true
-				}
-			}
-			return false
-		}
-		// 提权命令注入（如 Cisco enable 或 Linux sudo -i）
-		if dd.EnableRequired {
-			ecmd := strings.TrimSpace(dd.EnableCLI)
-			if ecmd == "" {
-				ecmd = "enable"
-			}
-			if !hasCmd(ecmd) {
-				out = append(out, ecmd)
-			}
-		}
-		// 分页关闭命令注入
-		for _, pc := range dd.DisablePagingCmds {
-			if strings.TrimSpace(pc) == "" {
-				continue
-			}
-			if !hasCmd(pc) {
-				out = append(out, pc)
-			}
-		}
-		return out
-	}()
-
-	// 拼装最终命令队列：预命令在前，用户命令在后
-	if len(preCmds) > 0 {
-		commands = append(commands, preCmds...)
-	}
-	if len(request.CliList) > 0 {
-		commands = append(commands, request.CliList...)
-	}
-	// 命令为空：允许继续（将返回空结果）
+	commands := append([]string{}, request.CliList...)
 
 	// 记录命令队列
-    logger.WithFields(map[string]interface{}{
-        "log_type": "collection",
-        "task_id":  request.TaskID,
-        "platform": request.DevicePlatform,
-        "commands": strings.Join(commands, ";"),
-    }).Info("Prepared command queue")
+	logger.WithFields(map[string]interface{}{
+		"log_type": "collection",
+		"task_id":  request.TaskID,
+		"platform": request.DevicePlatform,
+		"commands": strings.Join(commands, ";"),
+	}).Info("Prepared command queue")
 
 	// 创建任务记录
 	// 端口默认 22
@@ -522,22 +409,20 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 	}
 
 	// 保存任务到数据库
-	if err := s.saveTask(task); err != nil {
-		logger.Error("Failed to save task", "task_id", request.TaskID, "error", err)
-	}
+	s.saveTask(task)
 
 	// 创建任务上下文 - 使用timeout_all作为系统强制中断超时
 	taskCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutAll)*time.Second)
 	defer cancel()
 
-    s.addTaskContext(request.TaskID, &TaskContext{
-        Task:                    task,
-        Cancel:                  cancel,
-        StartTime:               startTime,
-        DeviceInteractStartTime: time.Now(), // 记录设备交互开始时间
-        Status:                  "running",
-        LogFilePath:             logPath,
-    })
+	s.addTaskContext(request.TaskID, &TaskContext{
+		Task:                    task,
+		Cancel:                  cancel,
+		StartTime:               startTime,
+		DeviceInteractStartTime: time.Now(), // 记录设备交互开始时间
+		Status:                  "running",
+		LogFilePath:             logPath,
+	})
 	defer s.removeTaskContext(request.TaskID)
 
 	// 记录设备交互开始时间和timeout_all配置
@@ -571,47 +456,45 @@ func (s *CollectorService) ExecuteTask(ctx context.Context, request *CollectRequ
 
 		// 记录超时中断日志
 		s.logTaskError(request.TaskID, fmt.Sprintf("System forced interruption after %v (timeout_all=%ds)", deviceInteractDuration, timeoutAll))
-		
+
 		// 更新任务状态
 		task.Duration = response.Duration.Milliseconds()
 		task.UpdatedAt = time.Now()
-		if updateErr := s.updateTask(task); updateErr != nil {
-			logger.Error("Failed to update task", "task_id", request.TaskID, "error", updateErr)
-		}
-		
+		s.updateTask(task)
+
 		return response, nil
 	}
 
-    if err != nil {
-        response.Success = false
-        response.Error = err.Error()
-        task.Status = model.TaskStatusFailed
-        task.ErrorMsg = err.Error()
+	if err != nil {
+		response.Success = false
+		response.Error = err.Error()
+		task.Status = model.TaskStatusFailed
+		task.ErrorMsg = err.Error()
 
-        // 记录错误日志
-        s.logTaskError(request.TaskID, err.Error())
-    } else {
-        response.Success = true
-        response.Results = results
-        task.Status = model.TaskStatusSuccess
+		// 记录错误日志
+		s.logTaskError(request.TaskID, err.Error())
+	} else {
+		response.Success = true
+		response.Results = results
+		task.Status = model.TaskStatusSuccess
 
-        // 序列化结果
-        if resultData, err := json.Marshal(results); err == nil {
-            task.Result = string(resultData)
-        }
-    }
+		// 序列化结果
+		if resultData, err := json.Marshal(results); err == nil {
+			task.Result = string(resultData)
+		}
+	}
 
-    // 将命令执行结果以 task_trace 形式写入按任务日志文件
-    deviceLabel := strings.TrimSpace(request.DeviceName)
-    if deviceLabel == "" { deviceLabel = strings.TrimSpace(request.DeviceIP) }
-    s.appendCommandLogs(request.TaskID, deviceLabel, results)
+	// 将命令执行结果以 task_trace 形式写入按任务日志文件
+	deviceLabel := strings.TrimSpace(request.DeviceName)
+	if deviceLabel == "" {
+		deviceLabel = strings.TrimSpace(request.DeviceIP)
+	}
+	s.appendCommandLogs(request.TaskID, deviceLabel, results)
 
 	// 更新任务状态（以毫秒记录执行时长）
 	task.Duration = response.Duration.Milliseconds()
 	task.UpdatedAt = time.Now()
-	if err := s.updateTask(task); err != nil {
-		logger.Error("Failed to update task", "task_id", request.TaskID, "error", err)
-	}
+	s.updateTask(task)
 
 	// 已移除 Redis 缓存逻辑
 
@@ -625,7 +508,7 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 	if port < 1 || port > 65535 {
 		port = 22
 	}
-    s.logTaskInfo(request.TaskID, fmt.Sprintf("Starting SSH collection for %s:%d", request.DeviceIP, port))
+	s.logTaskInfo(request.TaskID, fmt.Sprintf("Starting SSH collection for %s:%d", request.DeviceIP, port))
 
 	// 计算有效超时（与 ExecuteTask 逻辑保持一致）
 	effTimeoutSec := 30
@@ -647,20 +530,20 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 		devTimeoutSec = *request.DeviceTimeout
 	}
 	// 统一交互入口：通过 InteractBasic 执行并完成预命令与行过滤
-    execReq := &ExecRequest{
-        DeviceIP:         request.DeviceIP,
-        Port:             port,
-        DeviceName:       request.DeviceName,
-        DevicePlatform:   request.DevicePlatform,
-        CollectProtocol:  request.CollectProtocol,
-        UserName:         request.UserName,
-        Password:         request.Password,
-        EnablePassword:   request.EnablePassword,
-        TaskTimeoutSec:   effTimeoutSec,
-        DeviceTimeoutSec: devTimeoutSec,
-        TaskID:           request.TaskID,
-        LogType:          "collection",
-    }
+	execReq := &ExecRequest{
+		DeviceIP:         request.DeviceIP,
+		Port:             port,
+		DeviceName:       request.DeviceName,
+		DevicePlatform:   request.DevicePlatform,
+		CollectProtocol:  request.CollectProtocol,
+		UserName:         request.UserName,
+		Password:         request.Password,
+		EnablePassword:   request.EnablePassword,
+		TaskTimeoutSec:   effTimeoutSec,
+		DeviceTimeoutSec: devTimeoutSec,
+		TaskID:           request.TaskID,
+		LogType:          "collection",
+	}
 
 	// 使用请求中的 retries 参数进行重试（至少执行一次）
 	attempts := retries
@@ -713,7 +596,7 @@ func (s *CollectorService) executeSSHCollection(ctx context.Context, request *Co
 		}
 		displayCmd := cmdVal
 		if displayCmd == "" {
-			displayCmd = "<unknown>"
+			displayCmd = unknownValue
 		}
 		// 当前不进行结构化解析，保持空数组以兼容 API 字段
 		var fmtRows interface{} = []map[string]interface{}{}
@@ -844,13 +727,13 @@ func (s *CollectorService) GetStats() map[string]interface{} {
 		var totalDuration time.Duration
 		var completedTasks int
 		var maxDuration time.Duration
-		var minDuration time.Duration = time.Hour * 24 // 初始化为一个大值
+		minDuration := time.Hour * 24 // 初始化为一个大值
 
 		for _, taskCtx := range s.tasks {
 			if taskCtx.DeviceInteractDuration > 0 {
 				totalDuration += taskCtx.DeviceInteractDuration
 				completedTasks++
-				
+
 				if taskCtx.DeviceInteractDuration > maxDuration {
 					maxDuration = taskCtx.DeviceInteractDuration
 				}
@@ -862,11 +745,11 @@ func (s *CollectorService) GetStats() map[string]interface{} {
 
 		if completedTasks > 0 {
 			stats["device_interaction"] = map[string]interface{}{
-				"completed_tasks":    completedTasks,
-				"total_duration_ms":  totalDuration.Milliseconds(),
-				"avg_duration_ms":    totalDuration.Milliseconds() / int64(completedTasks),
-				"max_duration_ms":    maxDuration.Milliseconds(),
-				"min_duration_ms":    minDuration.Milliseconds(),
+				"completed_tasks":   completedTasks,
+				"total_duration_ms": totalDuration.Milliseconds(),
+				"avg_duration_ms":   totalDuration.Milliseconds() / int64(completedTasks),
+				"max_duration_ms":   maxDuration.Milliseconds(),
+				"min_duration_ms":   minDuration.Milliseconds(),
 			}
 		}
 	}
@@ -924,17 +807,15 @@ func (s *CollectorService) cleanupExpiredTasks() {
 }
 
 // saveTask 保存任务到数据库
-func (s *CollectorService) saveTask(task *model.Task) error {
+func (s *CollectorService) saveTask(task *model.Task) {
 	// 暂停任务信息写库：仅输出日志用于排查
 	logger.Info("Skip task DB write", "task_id", task.ID)
-	return nil
 }
 
 // updateTask 更新任务状态
-func (s *CollectorService) updateTask(task *model.Task) error {
+func (s *CollectorService) updateTask(task *model.Task) {
 	// 暂停任务信息写库：仅输出日志用于排查
 	logger.Info("Skip task DB update", "task_id", task.ID, "status", task.Status, "duration_ms", task.Duration)
-	return nil
 }
 
 // 已移除 Redis 缓存函数（保留数据库写入版本的任务日志函数）
@@ -943,94 +824,110 @@ func (s *CollectorService) updateTask(task *model.Task) error {
 
 // logTaskInfo 记录任务信息日志
 func (s *CollectorService) logTaskInfo(taskID, message string) {
-    logger.WithFields(map[string]interface{}{
-        "log_type": "collection",
-        "task_id":  taskID,
-        "message":  message,
-    }).Info("Task info")
-    s.saveTaskLog(taskID, "INFO", message)
+	logger.WithFields(map[string]interface{}{
+		"log_type": "collection",
+		"task_id":  taskID,
+		"message":  message,
+	}).Info("Task info")
+	s.saveTaskLog(taskID, "INFO", message)
 }
 
 // logTaskError 记录任务错误日志
 func (s *CollectorService) logTaskError(taskID, message string) {
-    logger.WithFields(map[string]interface{}{
-        "log_type": "collection",
-        "task_id":  taskID,
-        "message":  message,
-    }).Error("Task error")
-    s.saveTaskLog(taskID, "ERROR", message)
+	logger.WithFields(map[string]interface{}{
+		"log_type": "collection",
+		"task_id":  taskID,
+		"message":  message,
+	}).Error("Task error")
+	s.saveTaskLog(taskID, "ERROR", message)
 }
 
 // logTaskWarn 记录任务警告日志
 func (s *CollectorService) logTaskWarn(taskID, message string) {
-    logger.WithFields(map[string]interface{}{
-        "log_type": "collection",
-        "task_id":  taskID,
-        "message":  message,
-    }).Warn("Task warn")
-    s.saveTaskLog(taskID, "WARN", message)
+	logger.WithFields(map[string]interface{}{
+		"log_type": "collection",
+		"task_id":  taskID,
+		"message":  message,
+	}).Warn("Task warn")
+	s.saveTaskLog(taskID, "WARN", message)
 }
 
 // saveTaskLog 保存任务日志
 func (s *CollectorService) saveTaskLog(taskID, level, message string) {
-    // 追加一条结构化日志到按任务文件
-    s.mutex.RLock()
-    taskCtx, ok := s.tasks[taskID]
-    s.mutex.RUnlock()
-    if !ok || taskCtx == nil || strings.TrimSpace(taskCtx.LogFilePath) == "" {
-        return
-    }
-    // 组装与全局日志相似的 JSON 行
-    line := map[string]interface{}{
-        "time":     time.Now().Format("2006-01-02 15:04:05"),
-        "level":    strings.ToLower(level),
-        "log_type": "collection",
-        "task_id":  strings.TrimSpace(taskID),
-        "msg":      message,
-    }
-    data, err := json.Marshal(line)
-    if err != nil {
-        return
-    }
-    f, err := os.OpenFile(taskCtx.LogFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-    if err != nil { return }
-    defer f.Close()
-    _, _ = f.Write(append(data, '\n'))
+	// 追加一条结构化日志到按任务文件
+	s.mutex.RLock()
+	taskCtx, ok := s.tasks[taskID]
+	s.mutex.RUnlock()
+	if !ok || taskCtx == nil || strings.TrimSpace(taskCtx.LogFilePath) == "" {
+		return
+	}
+	// 组装与全局日志相似的 JSON 行
+	line := map[string]interface{}{
+		"time":     time.Now().Format("2006-01-02 15:04:05"),
+		"level":    strings.ToLower(level),
+		"log_type": "collection",
+		"task_id":  strings.TrimSpace(taskID),
+		"msg":      message,
+	}
+	data, err := json.Marshal(line)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(taskCtx.LogFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
 }
 
 // appendCommandLogs 将命令执行结果以 task_trace 的结构化日志写入按任务文件
 func (s *CollectorService) appendCommandLogs(taskID, deviceLabel string, results []*CommandResultView) {
-    if len(results) == 0 { return }
-    s.mutex.RLock()
-    taskCtx, ok := s.tasks[taskID]
-    s.mutex.RUnlock()
-    if !ok || taskCtx == nil || strings.TrimSpace(taskCtx.LogFilePath) == "" { return }
-    f, err := os.OpenFile(taskCtx.LogFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-    if err != nil { return }
-    defer f.Close()
-    dname := strings.TrimSpace(deviceLabel)
-    if dname == "" { dname = "<unknown>" }
-    for _, r := range results {
-        if r == nil { continue }
-        execOK := r.ExitCode == 0 && strings.TrimSpace(r.Error) == ""
-        execResult := "失败"
-        if execOK { execResult = "成功" }
-        cmdName := strings.TrimSpace(r.Command)
-        if cmdName == "" { cmdName = "<unknown>" }
-        line := map[string]interface{}{
-            "time":        time.Now().Format("2006-01-02 15:04:05"),
-            "level":       "info",
-            "log_type":    "collection",
-            "task_id":     strings.TrimSpace(taskID),
-            "device":      dname,
-            "command":     cmdName,
-            "status":      execResult,
-            "exit_code":   r.ExitCode,
-            "duration_ms": r.DurationMS,
-            "msg":         fmt.Sprintf("task_trace: device %s 执行 %s", dname, cmdName),
-        }
-        if data, err := json.Marshal(line); err == nil {
-            _, _ = f.Write(append(data, '\n'))
-        }
-    }
+	if len(results) == 0 {
+		return
+	}
+	s.mutex.RLock()
+	taskCtx, ok := s.tasks[taskID]
+	s.mutex.RUnlock()
+	if !ok || taskCtx == nil || strings.TrimSpace(taskCtx.LogFilePath) == "" {
+		return
+	}
+	f, err := os.OpenFile(taskCtx.LogFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	dname := strings.TrimSpace(deviceLabel)
+	if dname == "" {
+		dname = unknownValue
+	}
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		execOK := r.ExitCode == 0 && strings.TrimSpace(r.Error) == ""
+		execResult := "失败"
+		if execOK {
+			execResult = "成功"
+		}
+		cmdName := strings.TrimSpace(r.Command)
+		if cmdName == "" {
+			cmdName = unknownValue
+		}
+		line := map[string]interface{}{
+			"time":        time.Now().Format("2006-01-02 15:04:05"),
+			"level":       "info",
+			"log_type":    "collection",
+			"task_id":     strings.TrimSpace(taskID),
+			"device":      dname,
+			"command":     cmdName,
+			"status":      execResult,
+			"exit_code":   r.ExitCode,
+			"duration_ms": r.DurationMS,
+			"msg":         fmt.Sprintf("task_trace: device %s 执行 %s", dname, cmdName),
+		}
+		if data, err := json.Marshal(line); err == nil {
+			_, _ = f.Write(append(data, '\n'))
+		}
+	}
 }

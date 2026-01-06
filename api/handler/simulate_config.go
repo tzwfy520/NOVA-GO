@@ -1,19 +1,20 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"fmt"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
+	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
+
 	// 新增：数据库与模型
 	"github.com/sshcollectorpro/sshcollectorpro/internal/database"
 	"github.com/sshcollectorpro/sshcollectorpro/internal/model"
-	"gorm.io/gorm"
-	"gopkg.in/yaml.v3"
+	"github.com/sshcollectorpro/sshcollectorpro/pkg/logger"
 )
 
 type SimulateConfigHandler struct{}
@@ -63,29 +64,31 @@ func (h *SimulateConfigHandler) GetSimulateConfig(c *gin.Context) {
 			deviceNames := make([]gin.H, 0, len(dnRows))
 			defaultPresent := false
 			for _, n := range nsRows {
-				if n.Name == "default" { defaultPresent = true }
+				if n.Name == deviceTypeTagDefault {
+					defaultPresent = true
+				}
 				namespaces = append(namespaces, gin.H{
-					"name": n.Name,
-					"port": n.Port,
+					"name":         n.Name,
+					"port":         n.Port,
 					"idle_seconds": n.IdleSeconds,
-					"max_conn": n.MaxConn,
+					"max_conn":     n.MaxConn,
 				})
 			}
 			if !defaultPresent {
-				namespaces = append(namespaces, gin.H{"name": "default", "port": 22001, "idle_seconds": 180, "max_conn": 5})
+				namespaces = append(namespaces, gin.H{"name": deviceTypeTagDefault, "port": 22001, "idle_seconds": 180, "max_conn": 5})
 			}
 			for _, d := range dtRows {
 				deviceTypes = append(deviceTypes, gin.H{
-					"type": d.Type,
-					"prompt_suffixe": d.PromptSuffixe,
+					"type":                 d.Type,
+					"prompt_suffixe":       d.PromptSuffixe,
 					"enable_mode_required": d.EnableModeRequired,
-					"enable_mode_suffixe": d.EnableModeSuffixe,
-					"config_mode_suffixe": d.ConfigModeSuffixe,
+					"enable_mode_suffixe":  d.EnableModeSuffixe,
+					"config_mode_suffixe":  d.ConfigModeSuffixe,
 				})
 			}
 			for _, dn := range dnRows {
 				deviceNames = append(deviceNames, gin.H{
-					"name": dn.Name,
+					"name":        dn.Name,
 					"device_type": dn.DeviceType,
 				})
 			}
@@ -112,9 +115,11 @@ func (h *SimulateConfigHandler) GetSimulateConfig(c *gin.Context) {
 		}
 	}
 	// 保证默认命名空间存在
-	if sc.Namespace == nil { sc.Namespace = make(map[string]NamespaceConf) }
+	if sc.Namespace == nil {
+		sc.Namespace = make(map[string]NamespaceConf)
+	}
 	if _, ok := sc.Namespace["default"]; !ok {
-		sc.Namespace["default"] = NamespaceConf{ Port: 22001, IdleSeconds: 180, MaxConn: 5 }
+		sc.Namespace["default"] = NamespaceConf{Port: 22001, IdleSeconds: 180, MaxConn: 5}
 	}
 	// 转换为数组，便于前端渲染与编辑
 	namespaces := make([]gin.H, 0, len(sc.Namespace))
@@ -144,7 +149,16 @@ func (h *SimulateConfigHandler) GetSimulateConfig(c *gin.Context) {
 			"device_type": dn.DeviceType,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"code": "SUCCESS", "message": "OK", "data": gin.H{"namespaces": namespaces, "device_types": deviceTypes, "device_names": deviceNames}})
+	data := gin.H{
+		"namespaces":   namespaces,
+		"device_types": deviceTypes,
+		"device_names": deviceNames,
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    "SUCCESS",
+		"message": "OK",
+		"data":    data,
+	})
 }
 
 // SaveSimulateConfig 保存模拟配置（带事务与重试）
@@ -171,26 +185,39 @@ func (h *SimulateConfigHandler) SaveSimulateConfig(c *gin.Context) {
 			return
 		}
 		if _, ok := payload.DeviceType[dn.DeviceType]; !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"code": "TYPE_NOT_DEFINED", "message": fmt.Sprintf("设备名称 %s 的设备类型未在 device_type 定义: %s", name, dn.DeviceType)})
+			msg := fmt.Sprintf("设备名称 %s 的设备类型未在 device_type 定义: %s", name, dn.DeviceType)
+			c.JSON(http.StatusBadRequest, gin.H{"code": "TYPE_NOT_DEFINED", "message": msg})
 			return
 		}
 	}
 	// 先写入SQLite（事务替换整个配置集，带重试）
 	if err := database.TransactionWithRetry(func(tx *gorm.DB) error {
-		if err := tx.Exec("DELETE FROM sim_device_names").Error; err != nil { return err }
-		if err := tx.Exec("DELETE FROM sim_device_types").Error; err != nil { return err }
-		if err := tx.Exec("DELETE FROM sim_namespaces").Error; err != nil { return err }
+		if err := tx.Exec("DELETE FROM sim_device_names").Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM sim_device_types").Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM sim_namespaces").Error; err != nil {
+			return err
+		}
 		for name, n := range payload.Namespace {
-			row := model.SimNamespace{ Name: name, Port: n.Port, IdleSeconds: n.IdleSeconds, MaxConn: n.MaxConn }
-			if err := tx.Create(&row).Error; err != nil { return err }
+			row := model.SimNamespace{Name: name, Port: n.Port, IdleSeconds: n.IdleSeconds, MaxConn: n.MaxConn}
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
 		}
 		for typ, d := range payload.DeviceType {
-			row := model.SimDeviceType{ Type: typ, PromptSuffixe: d.PromptSuffixe, EnableModeRequired: d.EnableModeRequired, EnableModeSuffixe: d.EnableModeSuffixe, ConfigModeSuffixe: d.ConfigModeSuffixe }
-			if err := tx.Create(&row).Error; err != nil { return err }
+			row := model.SimDeviceType{Type: typ, PromptSuffixe: d.PromptSuffixe, EnableModeRequired: d.EnableModeRequired, EnableModeSuffixe: d.EnableModeSuffixe, ConfigModeSuffixe: d.ConfigModeSuffixe}
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
 		}
 		for name, dn := range payload.DeviceName {
-			row := model.SimDeviceName{ Name: name, DeviceType: dn.DeviceType }
-			if err := tx.Create(&row).Error; err != nil { return err }
+			row := model.SimDeviceName{Name: name, DeviceType: dn.DeviceType}
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	}, 6, 100*time.Millisecond); err != nil {

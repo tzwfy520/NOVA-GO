@@ -1,13 +1,14 @@
 package handler
 
 import (
-	"bufio"
+	"bytes"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/sshcollectorpro/sshcollectorpro/internal/config"
 )
 
@@ -28,76 +29,125 @@ func (h *LogsHandler) TailLogs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "LOG_PATH_EMPTY", "message": "日志路径未配置"})
 		return
 	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "200"))
+	limitStr := c.DefaultQuery("limit", "")
+	if strings.TrimSpace(limitStr) == "" {
+		limitStr = c.DefaultQuery("lines", "200")
+	}
+	limit, _ := strconv.Atoi(limitStr)
 	if limit <= 0 || limit > 1000 { // 安全边界
 		limit = 200
 	}
 	q := strings.TrimSpace(c.Query("q"))
+	if q == "" {
+		q = strings.TrimSpace(c.Query("keyword"))
+	}
 	lvl := strings.TrimSpace(c.Query("level"))
 
-	lines, err := readAllLines(path)
+	lines, err := tailLinesFiltered(path, limit, q, lvl)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "READ_FAILED", "message": "读取日志失败: " + err.Error()})
 		return
 	}
-
-	// 过滤
-	filtered := make([]string, 0, len(lines))
-	for _, ln := range lines {
-		if q != "" && !strings.Contains(strings.ToLower(ln), strings.ToLower(q)) {
-			continue
-		}
-		if lvl != "" {
-			// 简易级别匹配：适配 json/text 两种格式
-			lc := strings.ToLower(ln)
-			if !(strings.Contains(lc, "\"level\":\""+strings.ToLower(lvl)+"\"") || strings.Contains(lc, strings.ToLower(lvl))) {
-				continue
-			}
-		}
-		filtered = append(filtered, ln)
-	}
-
-	// 取尾部
-	start := 0
-	if len(filtered) > limit {
-		start = len(filtered) - limit
-	}
-	tail := filtered[start:]
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    "SUCCESS",
 		"message": "获取日志成功",
 		"data": gin.H{
 			"path":  path,
-			"count": len(tail),
-			"lines": tail,
+			"count": len(lines),
+			"lines": lines,
 		},
 	})
 }
 
-func readAllLines(path string) ([]string, error) {
-	f, err := os.Open(path)
+func tailLinesFiltered(filePath string, limit int, q string, lvl string) ([]string, error) {
+	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err == nil {
-		if info.Size() == 0 {
-			return []string{}, nil
-		}
-	}
-	s := bufio.NewScanner(f)
-	s.Buffer(make([]byte, 0, 64*1024), 10*1024*1024) // up to 10MB per line
-	res := make([]string, 0, 1024)
-	for s.Scan() {
-		res = append(res, s.Text())
-	}
-	if err := s.Err(); err != nil {
+
+	st, err := f.Stat()
+	if err != nil {
 		return nil, err
 	}
-	if len(res) == 0 {
-		return res, nil
+	size := st.Size()
+	if size <= 0 || limit <= 0 {
+		return []string{}, nil
 	}
-	return res, nil
+
+	qLower := strings.ToLower(strings.TrimSpace(q))
+	lvlLower := strings.ToLower(strings.TrimSpace(lvl))
+
+	matches := make([]string, 0, limit)
+	var carry []byte
+
+	const chunkSize int64 = 64 * 1024
+	var offset int64 = size
+
+	for offset > 0 && len(matches) < limit {
+		readSize := chunkSize
+		if offset < readSize {
+			readSize = offset
+		}
+		offset -= readSize
+
+		buf := make([]byte, readSize)
+		if _, err := f.ReadAt(buf, offset); err != nil {
+			return nil, err
+		}
+
+		if len(carry) > 0 {
+			buf = append(buf, carry...)
+			carry = nil
+		}
+
+		parts := bytes.Split(buf, []byte{'\n'})
+		if offset > 0 && len(parts) > 0 {
+			carry = parts[0]
+			parts = parts[1:]
+		}
+
+		for i := len(parts) - 1; i >= 0 && len(matches) < limit; i-- {
+			if len(parts[i]) == 0 {
+				continue
+			}
+			ln := string(parts[i])
+			if qLower != "" && !strings.Contains(strings.ToLower(ln), qLower) {
+				continue
+			}
+			if lvlLower != "" {
+				lc := strings.ToLower(ln)
+				if !(strings.Contains(lc, "\"level\":\""+lvlLower+"\"") || strings.Contains(lc, lvlLower)) {
+					continue
+				}
+			}
+			matches = append(matches, ln)
+		}
+	}
+
+	if offset == 0 && len(carry) > 0 && len(matches) < limit {
+		ln := string(carry)
+		if strings.TrimSpace(ln) != "" {
+			ok := true
+			if qLower != "" && !strings.Contains(strings.ToLower(ln), qLower) {
+				ok = false
+			}
+			if ok && lvlLower != "" {
+				lc := strings.ToLower(ln)
+				if !(strings.Contains(lc, "\"level\":\""+lvlLower+"\"") || strings.Contains(lc, lvlLower)) {
+					ok = false
+				}
+			}
+			if ok {
+				matches = append(matches, ln)
+			}
+		}
+	}
+
+	for i, j := 0, len(matches)-1; i < j; i, j = i+1, j-1 {
+		matches[i], matches[j] = matches[j], matches[i]
+	}
+
+	return matches, nil
 }

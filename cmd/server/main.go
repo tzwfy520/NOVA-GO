@@ -43,6 +43,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger.StartOrUpdateTaskLogCleaner(logger.TaskLogCleanerConfig{
+		Enabled:        cfg.Log.TaskLogs.Enabled,
+		RetentionDays:  cfg.Log.TaskLogs.RetentionDays,
+		MaxFiles:       cfg.Log.TaskLogs.MaxFiles,
+		MaxTotalSizeMB: cfg.Log.TaskLogs.MaxTotalSizeMB,
+		ScanInterval:   cfg.Log.TaskLogs.ScanInterval,
+		Directories:    cfg.Log.TaskLogs.Directories,
+	})
+
 	logger.Info("Starting SSH Collector Pro Server", "version", "1.0.0")
 
 	// 打印并发档位应用情况（按实际 workers 与 threads 输出）
@@ -67,33 +76,33 @@ func main() {
 	if err := collectorService.Start(ctx); err != nil {
 		logger.Fatal("Failed to start collector service", "error", err)
 	}
-	defer collectorService.Stop()
+	defer func() { _ = collectorService.Stop() }()
 
 	// 创建备份服务
 	backupService := service.NewBackupService(cfg)
 	if err := backupService.Start(ctx); err != nil {
 		logger.Fatal("Failed to start backup service", "error", err)
 	}
-	defer backupService.Stop()
+	defer func() { _ = backupService.Stop() }()
 
 	// 创建格式化服务
 	formatService := service.NewFormatService(cfg)
 	if err := formatService.Start(ctx); err != nil {
 		logger.Fatal("Failed to start format service", "error", err)
 	}
-	defer formatService.Stop()
+	defer func() { _ = formatService.Stop() }()
 
 	// 创建部署服务（注入 CollectorService 以便编排前后采集）
 	deployService := service.NewDeployService(cfg, collectorService)
 	if err := deployService.Start(ctx); err != nil {
 		logger.Fatal("Failed to start deploy service", "error", err)
 	}
-	defer deployService.Stop()
+	defer func() { _ = deployService.Stop() }()
 
 	// 启动模拟服务（可选）
 	var simMgr *simulate.Manager
 	if cfg.Server.SimulateEnable {
-		simPath := "simulate/simulate.yaml"
+		const simPath = "simulate/simulate.yaml"
 		if _, err := os.Stat(simPath); err != nil {
 			logger.Warn("Simulate: simulate.yaml missing, skip starting simulate servers", "path", simPath, "error", err)
 		} else {
@@ -176,6 +185,14 @@ func main() {
 				MaxBackups: cfg.Log.MaxBackups,
 				MaxAge:     cfg.Log.MaxAge,
 				Compress:   cfg.Log.Compress,
+			})
+			logger.StartOrUpdateTaskLogCleaner(logger.TaskLogCleanerConfig{
+				Enabled:        cfg.Log.TaskLogs.Enabled,
+				RetentionDays:  cfg.Log.TaskLogs.RetentionDays,
+				MaxFiles:       cfg.Log.TaskLogs.MaxFiles,
+				MaxTotalSizeMB: cfg.Log.TaskLogs.MaxTotalSizeMB,
+				ScanInterval:   cfg.Log.TaskLogs.ScanInterval,
+				Directories:    cfg.Log.TaskLogs.Directories,
 			})
 			logger.Info("Config reloaded")
 			// 模拟开关变化时动态启停
